@@ -41,7 +41,7 @@
     require_once( K_COUCH_DIR.'folder.php' );
 
     class KWebpage{
-        var $tpl_name;
+        var $tpl_name = null;
         var $tpl_title;
         var $tpl_id = null;
         var $tpl_desc;
@@ -57,6 +57,7 @@
         var $tpl_custom_params = array();
         var $tpl_handlers = array();
         var $tpl_type = '';
+        var $tpl_has_globals = 0;
 
         var $id = null;
         var $parent_id = 0;
@@ -118,10 +119,17 @@
             $page_id = trim( $page_id );
             $page_name = trim( $page_name );
 
-            if( $template_id ) $this->tpl_id = $template_id;
+            if( $template_id ){
+                if( $FUNCS->is_non_zero_natural($template_id) ){
+                    $this->tpl_id = $template_id;
+                }
+                else{
+                    $this->tpl_name = $template_id; // addons should take care to give non-numeric names to templates
+                }
+            }
             if( $page_id ) $this->id = $page_id;
-            if( $page_name ) $this->page_name = $page_name;
-            if( $html ) $this->html = $html;
+            if( $page_name != '' ) $this->page_name = $page_name;
+            if( $html != '' ) $this->html = $html;
 
             $rs = $this->_fill_template_info();
             if( $FUNCS->is_error($rs) ){ $this->error=1; $this->err_msg=$rs->err_msg; return; }
@@ -142,6 +150,7 @@
 
             // release fields
             $this->fields = array();
+            $this->_fields = array();
 
             /*if( $this->tpl_nested_pages ){
                 if( array_key_exists($this->tpl_id, $FUNCS->cached_nested_pages) ){
@@ -155,7 +164,7 @@
         function _fill_template_info(){
             global $DB, $AUTH, $FUNCS;
 
-            if( is_null($this->tpl_id) ){
+            if( is_null($this->tpl_id) && is_null($this->tpl_name) ){
                 // can only happen when template accessed via URL in browser
                 $this->accessed_via_browser = 1;
 
@@ -194,7 +203,12 @@
                     $rec = $FUNCS->cached_templates[$this->tpl_id];
                 }
                 else{
-                    $rs = $DB->select( K_TBL_TEMPLATES, array('*'), "id='" . $DB->sanitize( $this->tpl_id ). "'" );
+                    if( !is_null($this->tpl_id) ){
+                        $rs = $DB->select( K_TBL_TEMPLATES, array('*'), "id='" . $DB->sanitize( $this->tpl_id ). "'" );
+                    }
+                    else{
+                        $rs = $DB->select( K_TBL_TEMPLATES, array('*'), "name='" . $DB->sanitize( $this->tpl_name ). "'" );
+                    }
                     if( !count($rs) ){
                         return $FUNCS->raise_error( "Failed to find record in K_TBL_TEMPLATES" );
                     }
@@ -241,6 +255,7 @@
             $this->tpl_type = $rec['type'];
             $this->tpl_parent = $rec['parent'];
             $this->tpl_icon = $rec['icon'];
+            $this->tpl_has_globals = $rec['has_globals'];
 
             // HOOK: alter_template_info
             // At this point only the template's info is available in the page object. Can be be manipulated.
@@ -285,32 +300,12 @@
             }
             else{
                 // The custom fields -
-                $rs = $DB->select( K_TBL_FIELDS, array('*'), "template_id='" . $DB->sanitize( $this->tpl_id ). "' ORDER BY k_group, k_order, id" );
+                $rs2 = $DB->select( K_TBL_FIELDS, array('*'), "template_id='" . $DB->sanitize( $this->tpl_id ). "' ORDER BY k_group, k_order, id" );
 
                 // HOOK: alter_custom_fields_info_db
                 // Array of custom fields info, as fetched from the database, can be manipulated at this point.
-                $FUNCS->dispatch_event( 'alter_custom_fields_info_db', array(&$rs, &$this) );
+                $FUNCS->dispatch_event( 'alter_custom_fields_info_db', array(&$rs2, &$this) );
 
-                // rearrange fields according to their groups (if in any)
-                $rs2 = array();
-                $i=0;
-                for( $x=0; $x<count($rs); $x++ ){
-                    $rs2[$i++] = $rs[$x];
-                    unset( $rs[$x--] );
-                    $rs = array_values( $rs );
-
-                    if( $rs2[$i-1]['k_type'] == 'group' ){
-                        $group_name = $rs2[$i-1]['name'];
-                        for( $y=0; $y<count($rs); $y++ ){
-                            if( $rs[$y]['k_group']==$group_name ){
-                                $rs2[$i++] = $rs[$y];
-                                unset( $rs[$y--] );
-                                $rs = array_values( $rs );
-                            }
-
-                        }
-                    }
-                }
                 for( $x=0; $x<count($rs2); $x++ ){
                     $rs2[$x]['module'] = 'pages';
                     $fieldtype = $rs2[$x]['k_type'];
@@ -820,27 +815,42 @@
         function _fill_custom_fields(){
             global $DB, $FUNCS;
 
-            // Text type
-            $rs = $DB->select( K_TBL_DATA_TEXT, array('field_id', 'value'), "page_id='" . $DB->sanitize( $this->id ). "'" );
-            // Numeric type
-            $rs2 = $DB->select( K_TBL_DATA_NUMERIC, array('field_id', 'value'), "page_id='" . $DB->sanitize( $this->id ). "'" );
-            $rs = array_merge( $rs, $rs2 );
+            $vals = $this->_get_field_values();
 
             // HOOK: alter_custom_fields_data
             // The data fetched from database to fill the custom fields can be manipulated at this point.
-            $FUNCS->dispatch_event( 'alter_custom_fields_data', array(&$rs, &$this) );
+            $FUNCS->dispatch_event( 'alter_custom_fields_data', array(&$vals, &$this) );
 
-            if( count($rs) ){
-                foreach( $rs as $rec ){
-                    for( $x=0; $x<count($this->fields); $x++ ){
-                        $dest = &$this->fields[$x];
-                        if( $dest->id == $rec['field_id'] && !$dest->system ){
-                            $dest->store_data_from_saved( $rec['value'] );
-                            break;
-                        }
+            if( count($vals) ){
+                for( $x=0; $x<count($this->fields); $x++ ){
+                    $dest = &$this->fields[$x];
+                    if( !$dest->system && array_key_exists($dest->id, $vals) ){
+                        $dest->store_data_from_saved( $vals[$dest->id] );
                     }
                 }
             }
+        }
+
+        function _get_field_values(){
+            global $DB;
+
+            $page_id = $DB->sanitize( $this->id );
+            $tbls = array( K_TBL_DATA_TEXT, K_TBL_DATA_NUMERIC );
+            $vals = array();
+            foreach( $tbls as $tbl ){
+                $sql = "SELECT field_id, value FROM ".$tbl." WHERE page_id='".$page_id."'";
+
+                $result = @mysql_query( $sql, $DB->conn );
+                if( !$result ){
+                    ob_end_clean();
+                    die( "Could not successfully run query: " . mysql_error( $DB->conn ) );
+                }
+                while( $row=mysql_fetch_row($result) ){
+                    $vals[$row[0]]=$row[1];
+                }
+            }
+
+            return $vals;
         }
 
         function get_template_name(){
@@ -865,6 +875,8 @@
             }
 
             $DB->begin();
+
+            $this->__args = func_get_args();
 
             // HOOK: page_presave
             // the save process is about to begin.
@@ -1087,6 +1099,20 @@
                             for( $t=0; $t<count($this->fields); $t++ ){
                                 $tb = &$this->fields[$t];
                                 if( (!$tb->system) && $tb->k_type=='thumbnail' && $tb->assoc_field==$f->name ){
+                                    $existing_thumb = null;
+                                    if( strlen($tb->data) && strlen($f->data) ){
+                                        $path_parts = $FUNCS->pathinfo( $tb->data );
+                                        $match = preg_match("/^(.+)?-(?:\d+?)x(?:\d+?)$/i", $path_parts['filename'], $matches);
+                                        if( $match ){
+                                            $path_parts['dirname'] = ( $path_parts['dirname']=='.' || $path_parts['dirname']=='' ) ? '' : $path_parts['dirname'].'/';
+                                            $match = $path_parts['dirname'].$matches[1].'.'.$path_parts['extension'];
+                                            if( $f->data == $match ){
+                                                $existing_thumb = $path_parts['basename'];
+                                                if( $existing_thumb{0}==':' ) $existing_thumb = substr( $existing_thumb, 1 );
+                                            }
+                                        }
+                                    }
+
                                     if( $resized ){
                                         // create thumbnail
                                         $dest = null;
@@ -1098,7 +1124,12 @@
                                         $crop = ( $enforce_max ) ? 0 : 1;
                                         $quality = $tb->quality;
 
-                                        $thumbnail = k_resize_image( $src, $dest, $w, $h, $crop, $enforce_max, $quality );
+                                        if( !$existing_thumb ){
+                                            $thumbnail = k_resize_image( $src, $dest, $w, $h, $crop, $enforce_max, $quality );
+                                        }
+                                        else{
+                                            $thumbnail = $existing_thumb;
+                                        }
                                         if( $FUNCS->is_error($thumbnail) ){
                                             //$tb->err_msg = $thumbnail->err_msg;
                                             //$errors++;
@@ -1282,20 +1313,26 @@
             global $DB, $FUNCS;
 
             $cur_time = $FUNCS->get_current_desktop_time();
-            $rs = $DB->insert( K_TBL_PAGES, array('template_id'=>$this->tpl_id,
-                                                  'page_title'=>$title,
-                                                  'page_name'=>$name,
-                                                  'creation_date'=>$cur_time,
-                                                  'creation_IP'=>trim( $FUNCS->cleanXSS(strip_tags($_SERVER['REMOTE_ADDR'])) ),
-                                                  /* default page of gallery remains unpublished (always cloned) */
-                                                  'publish_date'=>( $this->tpl_gallery && $is_master ) ? '0000-00-00 00:00:00' : $cur_time,
-                                                  'is_master'=>$is_master
-                                                  )
-                             );
+
+            $arr_insert = array(
+                'template_id'=>$this->tpl_id,
+                'page_title'=>$title,
+                'page_name'=>$name,
+                'creation_date'=>$cur_time,
+                'creation_IP'=>trim( $FUNCS->cleanXSS(strip_tags($_SERVER['REMOTE_ADDR'])) ),
+                /* default page of gallery remains unpublished (always cloned) */
+                'publish_date'=>( $this->tpl_gallery && $is_master ) ? '0000-00-00 00:00:00' : $cur_time,
+                'is_master'=>$is_master
+            );
+
+            // HOOK: alter_create_insert
+            $FUNCS->dispatch_event( 'alter_create_insert', array(&$arr_insert, &$this) );
+
+            $rs = $DB->insert( K_TBL_PAGES, $arr_insert );
             if( $rs!=1 ) return $FUNCS->raise_error( "Failed to insert record in K_TBL_PAGES" );
             $page_id = $DB->last_insert_id;
 
-            $res = $this->_create_fields( $page_id, $title );
+            $res = $this->_create_fields( $page_id, $arr_insert['page_title'] );
             if( $FUNCS->is_error($res) ) return $res;
 
             return $page_id;
@@ -1308,18 +1345,24 @@
 
             $DB->begin();
             $cur_time = $FUNCS->get_current_desktop_time();
-            $rs = $DB->insert( K_TBL_PAGES, array('template_id'=>$this->tpl_id,
-                                                  'parent_id'=>$this->id,
-                                                  'page_title'=>$this->page_title,
-                                                  'page_name'=>$this->id . '-draft-' . time(),
-                                                  'creation_date'=>$cur_time,
-                                                  'modification_date'=>$cur_time,
-                                                  'is_master'=>0,
-                                                  'page_folder_id'=>$this->page_folder_id,
-                                                  'access_level'=>K_ACCESS_LEVEL_ADMIN,
-                                                  'comments_open'=>0
-                                                  )
-                             );
+
+            $arr_insert = array(
+                'template_id'=>$this->tpl_id,
+                'parent_id'=>$this->id,
+                'page_title'=>$this->page_title,
+                'page_name'=>$this->id . '-draft-' . time(),
+                'creation_date'=>$cur_time,
+                'modification_date'=>$cur_time,
+                'is_master'=>0,
+                'page_folder_id'=>$this->page_folder_id,
+                'access_level'=>K_ACCESS_LEVEL_ADMIN,
+                'comments_open'=>0
+            );
+
+            // HOOK: alter_draft_insert
+            $FUNCS->dispatch_event( 'alter_draft_insert', array(&$arr_insert, &$this) );
+
+            $rs = $DB->insert( K_TBL_PAGES, $arr_insert );
             if( $rs!=1 ){ $DB->rollback();  return $FUNCS->raise_error( "Failed to insert record in K_TBL_PAGES for draft" ); }
             $page_id = $DB->last_insert_id;
 
@@ -1338,16 +1381,22 @@
 
             $DB->begin();
             $cur_time = $FUNCS->get_current_desktop_time();
-            $rs = $DB->insert( K_TBL_PAGES, array('id'=>$this->parent_id,
-                                                  'template_id'=>$this->tpl_id,
-                                                  'page_title'=>$this->page_title,
-                                                  'page_name'=>'recreated_page_'.$this->parent_id,
-                                                  'creation_date'=>$cur_time,
-                                                  'publish_date'=>$cur_time,
-                                                  'is_master'=>!$this->tpl_is_clonable,
-                                                  'page_folder_id'=>$this->page_folder_id,
-                                                  )
-                             );
+
+            $arr_insert = array(
+                'id'=>$this->parent_id,
+                'template_id'=>$this->tpl_id,
+                'page_title'=>$this->page_title,
+                'page_name'=>'recreated_page_'.$this->parent_id,
+                'creation_date'=>$cur_time,
+                'publish_date'=>$cur_time,
+                'is_master'=>!$this->tpl_is_clonable,
+                'page_folder_id'=>$this->page_folder_id,
+            );
+
+            // HOOK: alter_recreate_parent_insert
+            $FUNCS->dispatch_event( 'alter_recreate_parent_insert', array(&$arr_insert, &$this) );
+
+            $rs = $DB->insert( K_TBL_PAGES, $arr_insert );
             if( $rs!=1 ){ $DB->rollback();  return $FUNCS->raise_error( "Failed to insert record in K_TBL_PAGES" ); }
 
             $res = $this->_create_fields( $this->parent_id, $this->page_title );
@@ -1578,7 +1627,7 @@
         }
 
         // Custom field validator for nested pages
-        function validate_parent( $field ){
+        static function validate_parent( $field ){
             global $FUNCS/*, $PAGE*/;
 
             $PAGE = &$field->page;
@@ -1598,7 +1647,7 @@
         }
 
         // Custom field validator for nested pages
-        function validate_masquerade_link( $field ){
+        static function validate_masquerade_link( $field ){
             global $FUNCS, $DB/*, $PAGE*/;
 
             $PAGE = &$field->page;
@@ -1715,6 +1764,7 @@
                 $handler_name = 'k_template_handler_' . $handler;
                 $vars[$handler_name] = '1';
             }
+            $vars['k_template_type'] = $this->tpl_type;
             if( K_PRETTY_URLS ){
                 $vars['k_template_link'] = K_SITE_URL . $FUNCS->get_pretty_template_link( $this->tpl_name );
                 $vars['k_prettyurls'] = 1;

@@ -52,7 +52,7 @@
                     'title'=>$FUNCS->t( 'delete' ),
                     'confirmation_msg'=>$FUNCS->t( 'confirm_delete_selected_users' ),
                     'weight'=>10,
-                    'listener'=>array( 'pages_list_bulk_action', array($this, _delete_handler) ),
+                    'listener'=>array( 'pages_list_bulk_action', array($this, '_delete_handler') ),
                 );
 
             return $arr_actions;
@@ -160,9 +160,6 @@
                 $tables = K_TBL_USERS .' as u, '. K_TBL_USER_LEVELS .' as lvl';
                 $where = 'u.access_level = lvl.k_level';
                 $orderby .= 'u.access_level DESC, u.name ASC';
-
-                // first query for pagination
-                $rs = $DB->select( $tables, array('count(u.id) as cnt'), $sql );
 
                 $sql = 'SELECT ' . $fields . ' FROM ' . $tables . ' WHERE ' . $where . ' ORDER BY ' . $orderby;
 

@@ -20,7 +20,7 @@
             if( !file_exists(K_SITE_DIR . $PAGE->tpl_name) ){
                 $html = $FUNCS->render( 'template_missing' );
 
-                $rs = $DB->select( K_TBL_PAGES, array('id'), "template_id='" . $DB->sanitize( $PAGE->tpl_id ). "' AND is_master<>'1'" );
+                $rs = $DB->select( K_TBL_PAGES, array('id'), "template_id='" . $DB->sanitize( $PAGE->tpl_id ). "' AND is_master<>'1' LIMIT 1" );
                 if( count($rs) ){
                     $FUNCS->add_html( $html );
                 }
@@ -263,7 +263,7 @@
                     'title'=>$FUNCS->t( 'delete' ),
                     'confirmation_msg'=>$FUNCS->t('confirm_delete_selected_pages'),
                     'weight'=>10,
-                    'listener'=>array( 'pages_list_bulk_action', array($this, _delete_handler) ),
+                    'listener'=>array( 'pages_list_bulk_action', array($this, '_delete_handler') ),
                 );
 
             return $arr_actions;
@@ -350,7 +350,7 @@
                     'content'=>"<cms:render 'list_updown' />",
                     'sortable'=>'0',
                     'sort_name'=>'weight',
-                    'listener'=>array( 'pages_list_post_action', array($this, _updown_handler) ),
+                    'listener'=>array( 'pages_list_post_action', array($this, '_updown_handler') ),
                 );
 
             $arr_default_fields['k_actions'] =
@@ -662,7 +662,7 @@
                     array(
                         'title'=>$FUNCS->t('view'),
                         'onclick'=>array( "this.blur();" ),
-                        'href'=>$CTX->get('k_page_link'),
+                        'href'=>K_SITE_URL . $PAGE->tpl_name . '?p=' . $PAGE->id,
                         'target'=>'_blank',
                         'icon'=>'magnifying-glass',
                         'weight'=>20,
@@ -823,6 +823,8 @@
             if( $PAGE->error ){
                 return $FUNCS->raise_error( ROUTE_NOT_FOUND );
             }
+            $PAGE->folders->set_sort( 'weight', 'asc' );
+            $PAGE->folders->sort( 1 );
             $PAGE->set_context();
         }
 

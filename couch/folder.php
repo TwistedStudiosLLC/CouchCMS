@@ -351,8 +351,8 @@
 
                         // check if 'order'by and 'order' have changed
                         if( $this->cmp_field!=$orig_cmp_field || $this->cmp_order!=$orig_cmp_order ){
-                            $this->root->set_sort( $orig_cmp_field, $orig_cmp_order );
-                            $this->root->sort(1);
+                            $this->children[$x]->root->set_sort( $orig_cmp_field, $orig_cmp_order );
+                            $this->children[$x]->root->sort(1);
                         }
                     }
 
@@ -414,7 +414,7 @@
         var $processed;
         var $consolidated_count=0; //includes all pages in child folders too
 
-        var $fields; // for admin form
+        var $fields = array(); // for admin form
 
         function __construct( $row, $template_name, &$root ){
             global $FUNCS, $Config;
@@ -538,6 +538,10 @@
                 $arr_vars['k_folder_pos'] = $this->pos_ex; // position amongst siblings
                 $arr_vars['k_first_child'] = $this->first_pos;
                 $arr_vars['k_last_child'] = $this->last_pos;
+
+                $arr_vars['k_folder_immediate_children_ex'] = $this->immediate_children_ex;
+                $arr_vars['k_folder_totalchildren_ex'] = $this->total_children_ex;
+                $arr_vars['k_folder_totalsiblings_orig'] = $this->total_siblings;
             }
 
             $CTX->set_all( $arr_vars );
@@ -552,7 +556,6 @@
 
             if( count($this->fields) ) return;
 
-            $this->fields = array();
             $fields = array(
                 'title'=>$FUNCS->t('title'),
                 'name'=>$FUNCS->t('name'),
@@ -766,7 +769,7 @@
         }
 
         // Custom field validators
-        function validate_parent( $field ){
+        static function validate_parent( $field ){
             global $FUNCS, $PAGE;
 
             $proposed_parent_id = trim( $field->get_data() );
@@ -783,7 +786,7 @@
             }
         }
 
-        function name_unique( $field ){
+        static function name_unique( $field ){
             global $FUNCS, $DB, $PAGE;
 
             $rs = $DB->select( K_TBL_FOLDERS, array('id'), "name='" . $DB->sanitize( trim($field->get_data()) ). "' and NOT id='" . $DB->sanitize( $PAGE->folder_id ) . "' and template_id='" . $DB->sanitize( $PAGE->tpl_id ). "'" );
@@ -934,6 +937,7 @@
                 $arr_vars['k_masqueraded_template'] = $this->pointer_link_detail['masterpage'];
                 $arr_vars['k_masqueraded_links'] = $this->get_admin_link();
             }
+            $arr_vars['k_access_level'] = $this->access_level;
 
             // Dynamically calculated
             $arr_vars['k_is_active'] = $this->is_current;
@@ -944,6 +948,10 @@
             $arr_vars['k_last_child'] = $this->last_pos;
             $arr_vars['k_total_siblings'] = $this->total_siblings_ex;
             $arr_vars['k_pos'] = $this->pos_ex;
+
+            $arr_vars['k_immediate_children_orig'] = $this->immediate_children;
+            $arr_vars['k_total_children_orig'] = $this->total_children;
+            $arr_vars['k_total_siblings_orig'] = $this->total_siblings;
 
             $arr_vars['k_nestedpage_link'] = K_SITE_URL . $this->get_link();
             $arr_vars['k_menu_link'] = ( $this->is_pointer && !$this->masquerades ) ? $this->pointer_link : $arr_vars['k_nestedpage_link'];
@@ -1383,6 +1391,7 @@
         var $is_custom;
         var $html;
         var $render;
+        var $args;
 
         function __construct( $row, &$root ){
             global $FUNCS;
@@ -1435,6 +1444,7 @@
             $arr_vars['k_'.$label.'_is_custom'] = $this->is_custom;
             $arr_vars['k_'.$label.'_html'] = $this->html;
             $arr_vars['k_'.$label.'_render'] = $this->render;
+            $arr_vars['k_'.$label.'_args'] = $this->args;
 
             // Dynamically calculated
             $arr_vars['k_is_active'] = $this->is_current;
@@ -1445,6 +1455,10 @@
             $arr_vars['k_last_child'] = $this->last_pos;
             $arr_vars['k_total_siblings'] = $this->total_siblings_ex;
             $arr_vars['k_pos'] = $this->pos_ex;
+
+            $arr_vars['k_immediate_children_orig'] = $this->immediate_children;
+            $arr_vars['k_total_children_orig'] = $this->total_children;
+            $arr_vars['k_total_siblings_orig'] = $this->total_siblings;
 
             $CTX->set_all( $arr_vars );
 
@@ -1527,13 +1541,14 @@
                 $arr_vars['k_'.$label.'_is_collapsed'] = $f->collapsed;
                 $arr_vars['k_'.$label.'_data'] = $f->get_data( 1 );
                 $arr_vars['k_'.$label.'_definition'] = $FUNCS->escape_HTML( $f->_html );
-                $arr_vars['k_'.$label.'_err_msg'] = $CTX->get( 'k_error_'.$f->name );
+                $arr_vars['k_'.$label.'_err_msg'] = $f->err_msg;
                 if($f->system){
                     $arr_vars['k_'.$label.'_wrapper_id'] = $f->name;
                 }
                 else{
                     $arr_vars['k_'.$label.'_wrapper_id'] = 'k_element_'.$f->name;
                 }
+                $arr_vars['k_'.$label.'_obj'] = $f;
 
                 unset( $f );
             }
@@ -1552,6 +1567,10 @@
             $arr_vars['k_last_child'] = $this->last_pos;
             $arr_vars['k_total_siblings'] = $this->total_siblings_ex;
             $arr_vars['k_pos'] = $this->pos_ex;
+
+            $arr_vars['k_immediate_children_orig'] = $this->immediate_children;
+            $arr_vars['k_total_children_orig'] = $this->total_children;
+            $arr_vars['k_total_siblings_orig'] = $this->total_siblings;
 
             $CTX->set_all( $arr_vars );
 

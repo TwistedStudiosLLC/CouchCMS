@@ -42,16 +42,15 @@
         error_reporting(E_ALL & ~E_NOTICE); // Report all errors except notices
     }
     // Since PHP 5.1.0 every call to a date/time function generates a E_NOTICE if the timezone isn't valid,
-    if( version_compare( phpversion(), '5.1.0', '>=' ) ){
-        date_default_timezone_set("America/New_York");
+    if( !ini_get('date.timezone') || !date_default_timezone_set(ini_get('date.timezone')) ){
+        date_default_timezone_set( "America/New_York" );
     }
-
 
 
     if( !defined('K_COUCH_DIR') ) die(); // cannot be loaded directly
 
-    define( 'K_COUCH_VERSION', '2.0.beta' ); // Changes with every release
-    define( 'K_COUCH_BUILD', '20160523' ); // YYYYMMDD - do -
+    define( 'K_COUCH_VERSION', '2.2' ); // Changes with every release
+    define( 'K_COUCH_BUILD', '20190417' ); // YYYYMMDD - do -
 
     if( file_exists(K_COUCH_DIR.'config.php') ){
         require_once( K_COUCH_DIR.'config.php' );
@@ -67,6 +66,13 @@
     // Ultra-simplified now that there is no IonCube involved :)
     if( !defined('K_PAID_LICENSE') ) define( 'K_PAID_LICENSE', 0 );
     if( !defined('K_REMOVE_FOOTER_LINK') ) define( 'K_REMOVE_FOOTER_LINK', 0 );
+
+    if( !defined('K_HTTPS') ) define( 'K_HTTPS', (
+        ( isset($_SERVER['HTTPS']) && (strtolower($_SERVER['HTTPS'])=='on' || strval($_SERVER['HTTPS'])=='1') ) ||
+        ( isset($_SERVER['SERVER_PORT']) && $_SERVER['SERVER_PORT']=='443' ) ||
+        ( isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO']=='https' ) ||
+        ( isset($_SERVER['HTTP_X_FORWARDED_SSL']) && strtolower($_SERVER['HTTP_X_FORWARDED_SSL'])=='on')
+    ) ? 1 : 0 );
 
     // Check if a cached version of the requested page may be used
     if ( !K_SITE_OFFLINE && !defined('K_ADMIN') && K_USE_CACHE && $_SERVER['REQUEST_METHOD']!='POST' ){
@@ -88,7 +94,12 @@
         if( !$auth && !$no_cache ){
             $k_cache_dir = K_COUCH_DIR . 'cache/';
             if( is_writable($k_cache_dir) ){
-                $k_cache_file = $k_cache_dir . md5($_SERVER['REQUEST_URI']) . '.dat';
+
+                $k_cache_url = 'http' . ((K_HTTPS) ? 's://' : '://') . $_SERVER['HTTP_HOST'] .
+                                (($_SERVER['SERVER_PORT']!='80' && $_SERVER['SERVER_PORT']!='443' && (strpos($_SERVER['HTTP_HOST'], ':')===false)) ? ':' . $_SERVER['SERVER_PORT'] : '') .
+                                $_SERVER['REQUEST_URI'];
+
+                $k_cache_file = $k_cache_dir . md5($k_cache_url) . '.dat';
                 if( file_exists($k_cache_file) ){
 
                     // Check if the cache has not expired
@@ -100,8 +111,13 @@
                         $pg = @unserialize( file_get_contents($k_cache_file) );
                         if( $pg ){
                             if( $pg['redirect_url'] ){
-                                header( "Location: ".$pg['redirect_url'], TRUE, 301 );
-                                die();
+                                if( $pg['redirect_url']===$k_cache_url ){ // corner case
+                                    @unlink( $k_cache_file );
+                                }
+                                else{
+                                    header( "Location: ".$pg['redirect_url'], TRUE, 301 );
+                                    die();
+                                }
                             }
                             else{
                                 $html = $pg['cached_html'];
@@ -163,8 +179,8 @@
     }
     if( !defined('K_HTML4_SELFCLOSING_TAGS') ) define( 'K_HTML4_SELFCLOSING_TAGS', 0 );
 
-    if( version_compare( '5.0.0', phpversion(), '>' ) ) {
-        die( 'You are using PHP version '. phpversion().' but the CMS requires at least 5.0' );
+    if( version_compare( '5.3.0', phpversion(), '>' ) ) {
+        die( 'You are using PHP version '. phpversion().' but the CMS requires at least 5.3.0' );
     }
 
     // Refuse to run on IIS
@@ -178,7 +194,6 @@
     }
 
     if ( !defined('K_SITE_DIR') ) define( 'K_SITE_DIR', dirname( K_COUCH_DIR ) . '/' );
-    if ( !defined('K_HTTPS') ) define( 'K_HTTPS', (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS']=='on') ? 1 : 0 );
 
     //unset($_SERVER['DOCUMENT_ROOT']); //testing
     if ( !defined('K_SITE_URL') ){
@@ -315,9 +330,6 @@
     }
 
     require_once( K_COUCH_DIR.'auth/auth.php' );
-    if ( defined('K_USE_ALTERNATIVE_MTA') && K_USE_ALTERNATIVE_MTA ){
-        require_once( K_COUCH_DIR.'includes/email.php' );
-    }
 
     // set paths for uploaded images
     global $Config;
@@ -367,6 +379,10 @@
 
     // addons to 2.0
     require_once( K_ADDONS_DIR . 'recaptcha/recaptcha.php' );
+    if ( defined('K_USE_ALTERNATIVE_MTA') && K_USE_ALTERNATIVE_MTA ){
+        require_once( K_ADDONS_DIR . 'phpmailer/phpmailer.php' );
+    }
+    require_once( K_COUCH_DIR.'addons/mosaic/mosaic.php' );
 
     // Current user's authentication info
     $AUTH = new KAuth( );
@@ -408,17 +424,10 @@
         unset( $t );
     }
 
-    // initialize theming
-    $FUNCS->renderables = array();
-    $FUNCS->dispatch_event( 'register_renderables' );               // phase 1 - register all render functions
-    define( 'K_REGISTER_RENDERABLES_DONE', '1' );
-    $FUNCS->dispatch_event( 'override_renderables' );               // phase 2 - override render functions (meant for addons)
-    $FUNCS->dispatch_event( 'alter_renderables', array(&$FUNCS->renderables) );
-    if( K_THEME_DIR && function_exists('k_override_renderables') ){ // phase 3 - the theme layer gets the final say in overriding all render functions
-        define( 'K_THEME_OVERRIDING_RENDERABLES', '1' );
-        k_override_renderables();
+    // initialize theming (for the admin panel we'll defer this till the current route is selected)
+    if( !defined('K_ADMIN') ){
+        $FUNCS->init_render();
     }
-    define( 'K_OVERRIDING_RENDERABLES_DONE', '1' );
 
     // All addons loaded at this point
     $FUNCS->dispatch_event( 'init' );

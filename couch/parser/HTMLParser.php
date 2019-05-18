@@ -131,19 +131,17 @@
 
                 // replace numeric entities
                 $str = preg_replace_callback( '~&#x0{0,8}([0-9A-F]+);?~i',
-                                                create_function(
-                                                    '$matches',
-                                                    '$val = hexdec($matches[1]);
-                                                    return ( $val < 128 ) ? chr($val) : $matches[0];'
-                                                ),
+                                                function($matches){
+                                                    $val = hexdec($matches[1]);
+                                                    return ( $val < 128 ) ? chr($val) : $matches[0];
+                                                },
                                                 $str );
 
                 $str = preg_replace_callback( '~&#0{0,8}([0-9]+);?~i',
-                                                create_function(
-                                                    '$matches',
-                                                    '$val = $matches[1];
-                                                    return ( $val < 128 ) ? chr($val) : $matches[0];'
-                                                ),
+                                                function($matches){
+                                                    $val = $matches[1];
+                                                    return ( $val < 128 ) ? chr($val) : $matches[0];
+                                                },
                                                 $str );
                 $str = stripcslashes( $str );
 
@@ -183,6 +181,7 @@
 
             // invalidate other dangerous words
             // https://www.owasp.org/index.php/XSS_Filter_Evasion_Cheat_Sheet
+            // https://gist.github.com/kurobeats/9a613c9ab68914312cbb415134795b45
             $ra2 = array(
                  'fscommand', 'onabort', 'onactivate', 'onafterprint', 'onafterupdate', 'onbeforeactivate',
                  'onbeforecopy', 'onbeforecut', 'onbeforedeactivate', 'onbeforeeditfocus',
@@ -206,6 +205,10 @@
                  'datafld', 'dataformatas', 'datasrc', 'binding', 'behavior',
                  'onformchange', 'onforminput', 'formaction', 'oninput', 'dirname', 'pattern', 'mhtml:',
                  'onhashchange', 'onmessage', 'onoffline', 'ononline', 'onpagehide', 'onpageshow', 'onpopstate', 'onstorage', 'onundo', 'onredo',
+                 'oninvalid', 'onsearch', 'onwheel', 'oncanplay', 'oncuechange', 'ondurationchange', 'onemptied', 'onplay', 'onratechange',
+                 'onstalled', 'onsuspend', 'ontimeupdate', 'onvolumechange', 'onwaiting', 'onshow', 'ontoggle',
+                 'onanimation', 'onauxclick', 'onfullscreen', 'ongotpointercapture', 'onlostpointercapture', 'onpointer', 'onorientationchange',
+                 'ontouch', 'ontransition', 'onvisibilitychange', 'onwebkit', 'onmoz',
                  );
 
             for( $i = 0; $i < count($ra2); $i++ ){

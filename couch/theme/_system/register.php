@@ -161,7 +161,7 @@
                         'path'=>'edit_folder/{:nonce}/{:fid}',
                         'constraints'=>array(
                             'nonce'=>'([a-fA-F0-9]{32})',
-                            'id'=>'(([1-9]\d*)?)',
+                            'fid'=>'(([1-9]\d*)?)',
                         ),
                         'include_file'=>K_COUCH_DIR.'edit-folders.php',
                         'filters'=>'KPagesAdmin::resolve_page=edit | KFoldersAdmin::set_ctx | KFoldersAdmin::resolve_folder=edit',
@@ -311,6 +311,8 @@
         $rs = $DB->select( K_TBL_TEMPLATES, array('*'), '1=1 ORDER BY id ASC' );
         if( count($rs) ){
             foreach( $rs as $tpl ){
+                if( $tpl['hidden'] > 1 ) continue;
+
                 $icon = trim( $tpl['icon'] );
                 $class = '';
                 $show = 1;
@@ -547,7 +549,7 @@
 
             $delete_prompt = $FUNCS->t( 'confirm_delete_folder' );
         }
-        else{ // pages module
+        elseif( $route->module=='pages' ){
             $page_id  = $CTX->get('k_page_id');
             $tpl_id   = $CTX->get('k_template_id');
             $tpl_name = $CTX->get('k_template_name');
@@ -680,7 +682,7 @@
         $query = strip_tags( trim($_GET['s']) );
 
         if( $query ){
-            $code = "<cms:search masterpage='".$PAGE->tpl_name."' ids_only='1' show_future_entries='1' qs_param='<' />"; // the dummy 'qs_param' will effectively make the cms:search tag ignore pagination
+            $code = "<cms:search masterpage='".$PAGE->tpl_name."' ids_only='1' show_future_entries='1' show_unpublished='1' qs_param='<' />"; // the dummy 'qs_param' will effectively make the cms:search tag ignore pagination
             $parser = new KParser( $code );
             $page_ids = $parser->get_HTML();
             if( !$page_ids ) $page_ids='0';
@@ -897,7 +899,7 @@
     }
 
     function _render_form_row(){
-        global $CTX;
+        global $CTX, $FUNCS;
 
         $field_type = $CTX->get( 'k_field_type' );
 
@@ -922,8 +924,34 @@
             }
         }
 
-        if( $field_type=='group' && $CTX->get('k_error')){ // if form error, expand all groups
-            $CTX->set( 'k_field_is_collapsed', '0' );
+        if( $field_type=='group' ){
+            $f = $CTX->get('k_field_obj');
+            $f->k_inactive = !$FUNCS->resolve_active( $f, $CTX->get('k_cur_form'), false );
+
+            if( $CTX->get('k_error') ){ // if form error, expand containing group
+                $tree = &$FUNCS->get_admin_form_fields( 'weight', 'asc' );
+                $f = &$tree->find( $f->name );
+                if( $f ){
+                    $count = count($f->children);
+                    for( $x=0; $x<$count; $x++ ){
+                        $count2 = count( $f->children[$x]->children );
+                        if( $count2 ){ // nested row
+                            for( $x2=0; $x2<$count2; $x2++ ){
+                                if( $f->children[$x]->children[$x2]->obj->err_msg ){
+                                    $CTX->set( 'k_field_is_collapsed', '0' );
+                                    break 2;
+                                }
+                            }
+                        }
+                        elseif( $f->children[$x]->obj->err_msg ){
+                            $CTX->set( 'k_field_is_collapsed', '0' );
+                            break;
+                        }
+                    }
+                    unset( $f );
+                }
+                unset( $tree );
+            }
         }
 
         // return an array of candidate templates
@@ -1409,11 +1437,11 @@
         static $done=0;
         $can_delete = $CTX->get( 'k_can_delete' );
         $page_id = $CTX->get( 'k_page_id' );
-        $page_title = $CTX->get( 'k_page_title' );
+        $page_title = $FUNCS->json_encode( str_replace("&quot;", '"', $CTX->get('k_page_title')) );
         $delete_prompt = str_replace( "'", "\'", $CTX->get('k_delete_prompt') );
 
         if( $can_delete ){
-            $html ='<a class="icon tt delete-list" href="#"  onclick="k_delete_single( \''.$page_id.'\', \''.$page_title.'\' ); return false;" title="'.$FUNCS->t('delete').'">'.$FUNCS->get_icon('trash').'</a>';
+            $html ='<a class="icon tt delete-list" href="#"  onclick=\'k_delete_single( "'.$page_id.'", '.$page_title.' ); return false;\' title="'.$FUNCS->t('delete').'">'.$FUNCS->get_icon('trash').'</a>';
 
             if( !$done ){
                 $done=1;
@@ -1430,10 +1458,14 @@
                         }
                         if( confirm(msg) ){
                             $('body').css('cursor', 'wait');
+
+                            var form = $('#".$form_name."');
+                            var checkboxes = form.find( '.checkbox-item' ).not( ':disabled' );
+                            checkboxes.prop( 'checked', false );
+
                             var col = $('#page-selector-'+id);
                             col.prop( 'checked', true );
 
-                            var form = $('#".$form_name."');
                             form.find('#k_bulk_action').val('batch_delete');
                             form.submit();
                         }
@@ -1618,6 +1650,7 @@
             }
 
             $user->populate_fields();
+            if( !is_object($PAGE) ){ $PAGE = new stdClass(); }
             return $user;
         }
         elseif( $masterpage=='comments' ){
@@ -1635,6 +1668,7 @@
                 return $FUNCS->raise_error( "mode '".$mode."' not supported for comments" );
             }
 
+            if( !is_object($PAGE) ){ $PAGE = new stdClass(); }
             return $comment;
         }
     }

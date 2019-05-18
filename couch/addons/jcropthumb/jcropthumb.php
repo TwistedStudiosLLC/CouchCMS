@@ -46,17 +46,17 @@
             $attr = $FUNCS->get_named_vars(
                 array(
                     'enforce_min'=>'1',
+                    'auto_refresh'=>'0',
+                    'hide_assoc_preview'=>'1',
                 ),
                 $params
             );
 
             $attr['enforce_min'] = ( $attr['enforce_min']==0 ) ? 0 : 1;
+            $attr['auto_refresh'] = ( $attr['auto_refresh']==1 ) ? 1 : 0;
+            $attr['hide_assoc_preview'] = ( $attr['hide_assoc_preview']==0 ) ? 0 : 1;
 
             return $attr;
-        }
-
-        function store_posted_changes( $post_val ){
-            return;
         }
 
         function get_data_to_save(){
@@ -83,6 +83,50 @@
             return $data;
         }
 
+        function store_posted_changes( $post_val ){
+            if( $this->auto_refresh ){
+                global $FUNCS, $Config;
+
+                $f = $this->page->_fields[$this->assoc_field];
+                if( $this->deleted || $this->k_inactive || !$f || $f->deleted || $f->k_inactive ) return; // no need to store
+
+                if( $_POST['f_'.$this->assoc_field.'_refresh'] ){
+                    $f->refresh_form = 1;
+
+                    if( $f->modified ){
+                        // create thumbnail..
+                        $data = '';
+                        $src = $f->get_data();
+                        $domain_prefix = $Config['k_append_url'] . $Config['UserFilesPath'] . 'image/';
+                        if( strpos($src, $domain_prefix)===0 ){ // process image only if local
+                            $src = substr( $src, strlen($domain_prefix) );
+                            if( $src ){
+                                $src = $Config['UserFilesAbsolutePath'] . 'image/' . $src;
+                                $dest = null;
+                                $w = $this->width;
+                                $h = $this->height;
+                                $enforce_max = $this->enforce_max;
+                                $crop = ( $enforce_max ) ? 0 : 1;
+                                $quality = $this->quality;
+
+                                $thumbnail = k_resize_image( $src, $dest, $w, $h, $crop, $enforce_max, $quality );
+                                if( !$FUNCS->is_error($thumbnail) ){
+                                    $path_parts = $FUNCS->pathinfo( $f->get_data() );
+                                    $img_path = $path_parts['dirname'] . '/';
+                                    $img_path = substr( $img_path, strlen($domain_prefix) );
+                                    if( $img_path ) $thumbnail = $img_path . $thumbnail;
+                                    $data = ':' . $thumbnail; // add marker
+                                }
+                            }
+                        }
+                        $post_val = $data;
+                    }
+                }
+            }
+
+            parent::store_posted_changes( $post_val );
+        }
+
         function validate(){
 
             $this->k_type = 'thumbnail';
@@ -97,8 +141,12 @@
         function _render( $input_name, $input_id, $extra1='', $dynamic_insertion=0 ){
             global $FUNCS, $CTX, $Config;
 
-            $assoc_image = $this->page->_fields[$this->assoc_field]->get_data();
+            $f = $this->page->_fields[$this->assoc_field];
+            if( $f ){
+                $assoc_image = $this->page->_fields[$this->assoc_field]->get_data();
+            }
             $value = $this->get_data();
+            if( $value ) $value .= '?='.time();
             $tb_preview = $value ? $value : K_SYSTEM_THEME_URL . 'assets/upload-image.gif';
             $tb_preview_icon = $value ? $value : K_SYSTEM_THEME_URL . 'assets/upload-image.gif';
 
@@ -120,7 +168,7 @@
                 $html .= '</div>';
             }
 
-            if( $assoc_image ){
+            if( $assoc_image && !$this->deleted && $f && !$f->deleted ){
 
                 // check if local
                 $domain_prefix = $Config['k_append_url'] . $Config['UserFilesPath'] . 'image/';
@@ -208,8 +256,12 @@
                                 $nonce = $FUNCS->create_nonce( 'jcrop_image_'.$data );
                                 $data = $data . '|' . $nonce;
 
-                                $html .= '<div class="crop-group field"><a href="javascript:k_jcrop_thumb(\''.$input_id.'\', \''.$data.'\')" class="btn button">'.$FUNCS->t('crop').'</a></div>';
+                                $html .= '<div class="crop-group field"><a href="javascript:k_jcrop_thumb(\''.$input_id.'\', \''.$data.'\')" class="btn button">'.$FUNCS->t('crop').'</a>';
+                                $html .= '<span id="' .$input_id. '_wh"></span> x ';
+                                $html .= '</div>';
                                 $html .='</div>';
+
+                                $html .= '<input type="hidden" id="' . $input_id . '" name="'. $input_id .'" value="'. htmlspecialchars( $this->data, ENT_QUOTES, K_CHARSET ) .'" />';
 
                                 ob_start();
                                 ?>
@@ -220,6 +272,7 @@
                                             $('#<?php echo $input_id;?>_y').val(c.y);
                                             $('#<?php echo $input_id;?>_w').val(c.w);
                                             $('#<?php echo $input_id;?>_h').val(c.h);
+                                            $('#<?php echo $input_id;?>_wh').html('w: ' + parseInt(c.w) + '&nbsp;&nbsp;h: ' + parseInt(c.h));
                                         },
                                         aspectRatio: <?php echo $aspect_ratio; ?>,
                                         setSelect:   [ <?php echo $src_x; ?>, <?php echo $src_y; ?>, <?php echo $src_x2; ?>, <?php echo $src_y2; ?> ],
@@ -242,7 +295,6 @@
                                         $('#<?php echo $input_id; ?>_pop').bPopup();
 
                                     });
-
                                 });
                                 <?php
                                 $js = ob_get_contents();
@@ -250,6 +302,54 @@
                                 $FUNCS->add_js( $js );
                             }
                         }
+                    }
+                }
+            }
+
+            if( $this->auto_refresh ){
+                if( $f && !$f->_jcropthumb_done && !$this->deleted && !$f->deleted ){
+                    $f->_jcropthumb_done = 1;
+                    $html .= '<input type="hidden" id="f_' . $this->assoc_field . '_refresh" name="f_'. $this->assoc_field .'_refresh" value="0" />';
+                    ob_start();
+                    ?>
+                    $(function(){
+                        if( !$("div#k_overlay").length ){
+                            $('<div/>', {
+                                id: 'k_overlay',
+                            })
+                            .css({
+                                'filter':'alpha(opacity=60)', 'zoom':'1',
+                                'opacity':'0.6',
+                                'height': '100%',
+                                'width': '100%',
+                                'background-color': '#0b0b0b',
+                                'z-index': 10000,
+                                'position': 'absolute',
+                                'top': 0,
+                                'left': 0,
+                                'display': 'none'
+                            })
+                            .appendTo( 'body' );
+                        }
+
+                        $('#f_<?php echo $this->assoc_field; ?>').bind('k_change', function(e){
+                            $('#k_overlay').css('display', 'block');
+                            var form = $('#<?php echo $CTX->get('k_cur_form', 2); ?>');
+                            form.find('#f_<?php echo $this->assoc_field; ?>_refresh').val('1');
+                            form.submit();
+                            return false;
+                        });
+                    });
+                    <?php
+                    $js = ob_get_contents();
+                    ob_end_clean();
+                    $FUNCS->add_js( $js );
+
+                    if( $this->hide_assoc_preview ){
+                        $css = "#k_element_".$this->assoc_field." div.img-preview, #k_element_".$this->assoc_field." a.btn.popup-img, #k_label_f_".$this->name."{ display:none; }\r\n";
+                        $css .= "#k_element_".$this->assoc_field." div.input-group.upload-group, #k_element_".$this->name." { margin-top: 0; }";
+                        $css .= "#k_element_".$this->name." div.img-preview{ margin-top: -8px; }";
+                        $FUNCS->add_css( $css );
                     }
                 }
             }
@@ -291,7 +391,7 @@
                             }
                             catch( e ){}
 
-                            alert('<?php echo $FUNCS->t('thumb_recreated'); ?>');
+                            //alert('<?php echo $FUNCS->t('thumb_recreated'); ?>');
 
                         }
                         else{

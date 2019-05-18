@@ -24,7 +24,7 @@
 
     // and process the current request
     if( isset($_GET['o']{0}) ){
-        $html = $FUNCS->process_route( $_GET['o'], $_GET['q'] );
+        $html = $FUNCS->process_route( $FUNCS->unhtmlentities($_GET['o'], K_CHARSET), $_GET['q'] );
     }
     else{
         // if no route specified in request, redirect to the first registered route (or show welcome msg if no route available)
@@ -58,6 +58,9 @@
         if( $DB->debug ){ $html .= " (in ".k_format_time($DB->query_time).")"; }
         $html .= " -->";
     }
+
+    // HOOK: alter_final_admin_page_output
+    $FUNCS->dispatch_event( 'alter_final_admin_page_output', array(&$html) );
 
     // final output
     $CTX->pop();

@@ -102,31 +102,60 @@
         }
 
         function show( $params, $node ){
-            global $CTX;
+            global $FUNCS, $CTX;
             if( count($node->children) ) {die("ERROR: Tag \"".$node->name."\" is a self closing tag");}
 
-            // If second param set and first is a variable, return variable only from local scope.
-            if( $params[1]['rhs'] && $node->attributes[0]['value_type']==K_VAL_TYPE_VARIABLE ){
-                return $CTX->get( $node->attributes[0]['value'], 1 );
+            extract( $FUNCS->get_named_vars(
+                        array( 'var'=>'', /*placeholder*/
+                               'scope'=>'',
+                               'as_json'=>'0',
+                              ),
+                        $params)
+                   );
+
+            $value = $params[0]['rhs'];
+            $scope = strtolower( trim($scope) );
+            $as_json = ( $as_json==1 ) ? 1 : 0;
+
+            // If scope set and first param is a variable, return variable only from the specified scope scope.
+            if( $scope != '' && $node->attributes[0]['value_type']==K_VAL_TYPE_VARIABLE ){
+                if( $scope!='1' && $scope!='2' && $scope!='global' && $scope!='local'  ){
+                    die("ERROR: Tag \"".$node->name."\" has unknown scope '" . $scope. "'. Only 'global (2)' or 'local (1)' are valid.");
+                }
+                $scope = ( $scope=='global' || $scope=='2' ) ? 2 : 1;
+
+                $value = $CTX->get( $node->attributes[0]['value'], $scope );
             }
-            else{
-                return $params[0]['rhs'];
-            }
+
+            if( $as_json && is_array($value) ){ $value = $FUNCS->json_encode( $value ); }
+            return $value;
         }
 
         function set( $params, $node ){
-            global $CTX;
+            global $FUNCS, $CTX;
             if( count($node->children) ) {die("ERROR: Tag \"".$node->name."\" is a self closing tag");}
 
+            extract( $FUNCS->get_named_vars(
+                        array(
+                               'scope'=>'',
+                               'is_json'=>'0',
+                              ),
+                        $params)
+                   );
+
             $varname = $params[0]['lhs'];
+            $value = $params[0]['rhs'];
+            $scope = strtolower( trim($scope) );
+            $is_json = ( $is_json==1 ) ? 1 : 0;
+
             if( $varname ){
-                $scope = strtolower( trim($params[1]['rhs']) );
                 if( $scope != '' && ($scope!='parent' && $scope!='global' && $scope!='local') ){
-                    die("ERROR: Tag \"".$node->name."\" has unknown scope " . $scope);
+                    die("ERROR: Tag \"".$node->name."\" has unknown scope '" . $scope. "'. Only 'global', 'local' or 'parent' are valid.");
                 }
 
                 if( substr($varname, 0, 2)!='k_' ){
-                    $CTX->set( $varname, $params[0]['rhs'], $scope );
+                    if( $is_json && !is_array($value) ){ $value = $FUNCS->json_decode( $value ); }
+                    $CTX->set( $varname, $value, $scope );
                 }
                 else{
                     die("ERROR: \"".$varname."\" cannot be set because it begins with 'k_' (considered system variable)");
@@ -143,19 +172,50 @@
                         array( 'var'=>'',
                                'local_only'=>'',
                                'default'=>'',
+                               'scope'=>null,
+                               'as_json'=>'0',
+                               'into'=>'',
+                               'into_scope'=>'',
                               ),
                         $params)
                    );
 
             $var = trim($var);
-            $scope = ( $local_only==1 ) ? 1 : 0;
+            $tmp = ( $local_only==1 ) ? 1 : 0;
             $has_default = ( strlen($default) ) ? 1 : 0;
+            $as_json = ( $as_json==1 ) ? 1 : 0;
+            $into = trim( $into );
+            $into_scope = strtolower( trim($into_scope) );
+            if( $into_scope != '' && ($into_scope!='parent' && $into_scope!='global' && $into_scope!='local') ){
+                die("ERROR: Tag \"".$node->name."\" has unknown into_scope '" . $into_scope. "'. Only 'global', 'local' or 'parent' are valid.");
+            }
+
+            // v2.0 - this new parameter, if set, overrides 'local_only'
+            if( !is_null($scope) ){
+                $scope = strtolower( trim($scope) );
+                if( $scope != '' ){
+                    if( $scope!='global' && $scope!='local' ){
+                        die("ERROR: Tag \"".$node->name."\" has unknown scope '" . $scope. "'. Only 'global' or 'local' are valid.");
+                    }
+                    $tmp = ( $scope=='global' ) ? 2 : 1;
+                }
+            }
+            $scope = $tmp;
 
             if( $var ){
-                $val = $CTX->get( $var, $scope );
-                if( $has_default && !strlen($val) ){ $val = $default; }
+                $value = $CTX->get( $var, $scope );
+                if( $has_default ){
+                    $has_content = is_array($value) ? count($value) : strlen($value);
+                    if( !$has_content )$value = $default;
+                }
 
-                return $val;
+                if( $into!='' ){
+                    $CTX->set( $into, $value, $into_scope );
+                }
+                else{
+                    if( $as_json && is_array($value) ){ $value = $FUNCS->json_encode( $value ); }
+                    return $value;
+                }
             }
         }
 
@@ -167,13 +227,15 @@
             extract( $FUNCS->get_named_vars(
                         array( 'var'=>'',
                                'value'=>'',
-                               'scope'=>''
+                               'scope'=>'',
+                               'is_json'=>'0',
                               ),
                         $params)
                    );
 
             $varname = trim( $var );
-            $scope = strtolower( $scope );
+            $scope = strtolower( trim($scope) );
+            $is_json = ( $is_json==1 ) ? 1 : 0;
 
             if( $varname ){
                 if( $scope != '' && ($scope!='parent' && $scope!='global' && $scope!='local') ){
@@ -181,6 +243,7 @@
                 }
 
                 if( substr($varname, 0, 2)!='k_' ){
+                    if( $is_json && !is_array($value) ){ $value = $FUNCS->json_decode( $value ); }
                     $CTX->set( $varname, $value, $scope );
                 }
                 else{
@@ -189,76 +252,79 @@
             }
         }
 
-        // Used to get a custom field by specifying the template name and page name.
-        // If no page name specified, the 'default' page will be used (suits non-clonable pages)
-        function get_custom_field( $params, $node ){
-            global $CTX, $FUNCS, $PAGE, $DB, $Config;
-            if( count($node->children) ) {die("ERROR: Tag \"".$node->name."\" is a self closing tag");}
+        // Used to get a field by specifying the template name and page name.
+        // If no page name specified, the 'default' page will be used (suits non-clonable pages.
+        // If no masterpage specified, the current template will be used.
+        function get_field( $params, $node ){
+            global $CTX, $FUNCS, $PAGE;
+            static $cache = array();
 
-            extract( $FUNCS->get_named_vars(
+            $attr = $FUNCS->get_named_vars(
                         array( 'var'=>'',
                                'masterpage'=>'',
-                               'page'=>''
+                               'page'=>'',
+                               'id'=>''
                               ),
-                        $params)
-                   );
+                        $params);
+            extract( $attr );
 
             $var = trim($var);
             if( $var ){
                 if( !$masterpage ){
-                    die( "ERROR: Tag \"".$node->name."\": 'masterpage' attribute missing" );
+                    // use the current template
+                    $masterpage = $PAGE->tpl_name;
                 }
 
-                $sql = "t.id = p.template_id and ";
-                $sql .= "t.name = '".$DB->sanitize( $masterpage )."' and ";
-                if( $page ){
-                    $sql .= "p.page_name = '".$DB->sanitize( $page )."' and ";
+                // check cache first
+                unset( $attr['var'] );
+                $key = md5( serialize($attr) );
+                if( isset($cache[$key]) ){
+                    $pg = $cache[$key];
                 }
                 else{
-                    $sql .= "p.is_master = '1' and "; //if no page specified, use the default page
-                }
-                $sql .= "f.template_id = t.id and f.name = '".$DB->sanitize( $var )."'";
-
-                $rs = $DB->select(K_TBL_TEMPLATES . ' t, ' . K_TBL_PAGES . ' p, ' . K_TBL_FIELDS . ' f' , array('p.id as pid', 'f.id as fid', 'f.k_type as field_type', 'f.search_type as type', 'f.default_data as default_data'), $sql );
-                if( count($rs) ){
-                    $pid = $rs[0]['pid'];
-                    $fid = $rs[0]['fid'];
-                    $field_type = $rs[0]['field_type'];
-                    $type = $rs[0]['type'];
-                    $default_data = $rs[0]['default_data'];
-
-                    $table = ($type=='text') ? K_TBL_DATA_TEXT : K_TBL_DATA_NUMERIC;
-                    $rs = $DB->select( $table, array('value'), "page_id='".$DB->sanitize( $pid )."' and field_id='".$DB->sanitize( $fid )."'" );
-
-                    if( count($rs) ){
-                        $data = $rs[0]['value'];
-
-                        if( !strlen($data) ){
-                            $data = $default_data;
-                        }
-
-                        if( $type!='text' ){
-                            $pos = strpos( $data, ".00" );
-                            if( $pos!==false ){
-                                $data = substr( $data, 0, $pos );
-                            }
-                        }
-                        else{
-                            // add domain info to uploaded items
-                            if( $field_type=='image' || $field_type=='thumbnail' || $field_type=='file' ){
-                                if( $data{0}==':' ){ // if marker
-                                    $data = substr( $data, 1 );
-                                    $folder = ( $field_type=='thumbnail' ) ? 'image' : $field_type;
-                                    $domain_prefix = $Config['k_append_url'] . $Config['UserFilesPath'] . $folder . '/';
-                                    $data = $domain_prefix . $data;
-                                }
-                            }
-                        }
-
-                        return $data;
+                    if( $page!=='' ){
+                        $pg = new KWebpage( $masterpage, 0, $page );
                     }
+                    elseif( $id ){
+                        $pg = new KWebpage( $masterpage, $id );
+                    }
+                    else{
+                        $pg = new KWebpage( $masterpage ); //if no page specified, use the default page
+                    }
+
+                    // cache last accessed 25 objects
+                    if( count($cache) >= 25 ){
+                        reset( $cache );
+                        $orig_key = key( $cache );
+                        $cache[$orig_key]->destroy();
+                        unset( $cache[$orig_key] );
+                    }
+                    $cache[$key] = $pg;
+                }
+
+                if( $pg->error ) return;
+                if( isset($pg->_fields[$var]) ){
+                    $data = $pg->_fields[$var]->get_data( 1 );
+                }
+
+                if( count($node->children) ){
+                    $CTX->set( 'k_field_name', $var );
+                    $CTX->set( 'k_field_val', $data );
+
+                    foreach( $node->children as $child ){
+                        $html .= $child->get_HTML();
+                    }
+                    return $html;
+                }
+                else{
+                    return $data;
                 }
             }
+        }
+
+        // deprecated.. piggybacks for now on cms:get_field
+        function get_custom_field( $params, $node ){
+            return $this->get_field( $params, $node );
         }
 
         function capture( $params, $node ){
@@ -266,13 +332,18 @@
 
             extract( $FUNCS->get_named_vars(
                         array( 'into'=>'',
-                               'scope'=>''
+                               'scope'=>'',
+                               'trim'=>'0',
+                               'is_json'=>'0',
                               ),
                         $params)
                    );
             $varname = trim( $into );
             $scope = strtolower( trim($scope) );
             if( $scope=='' ) $scope='global';
+            $trim = ( $trim==1 ) ? 1 : 0;
+            $is_json = ( $is_json==1 ) ? 1 : 0;
+
             if( $varname ){
                 if( $scope!='parent' && $scope!='global' ){ //local scope makes no sense
                     die("ERROR: Tag \"".$node->name."\" has unknown scope " . $scope);
@@ -284,6 +355,8 @@
                         $html .= $child->get_HTML();
                     }
 
+                    if( $trim ){ $html = trim( $html ); }
+                    if( $is_json ){ $html = $FUNCS->json_decode( $html ); }
                     $CTX->set( $varname, $html, $scope );
                 }
                 else{
@@ -312,54 +385,156 @@
             global $FUNCS, $CTX;
             extract( $FUNCS->get_named_vars(
                         array( 'var'=>'',
-                               'as'=>'item',
-                               'sep'=>'|'
+                               'as'=>'',
+                               'sep'=>'|',
+                               'key'=>'',
+                               'startcount'=>'0',
+                               'token'=>'',
+                               'is_json'=>'0',
                               ),
                         $params)
                    );
 
-            if( !$sep ) $sep = '|';
-            if( $sep == '\r\n' ){
-                $sep = "\n";
-            }
-            elseif( $sep == '\r' ){
-                $sep = "\r";
-            }
-            elseif( $sep == '\n' ){
-                $sep = "\n";
-            }
-            elseif( $sep == '\t' ){
-                $sep = "\t";
+            $as = trim( $as ); if( $as=='' ){ $as='item'; }
+            $key = trim( $key ); if( $key=='' ){ $key='key'; }
+            $startcount = $FUNCS->is_int( $startcount ) ? intval( $startcount ) : 1;
+            $token = trim( $token );
+            $is_json = ( $is_json==1 ) ? 1 : 0;
+
+            if( $is_json && !is_array($var) ){ $var = $FUNCS->json_decode( $var ); }
+
+            if( !is_array($var) ){
+                if( !$sep ) $sep = '|';
+                if( $sep == '\r\n' || $sep == '\r' || $sep == '\n' ){
+                    $var = str_replace( array("\r\n", "\r", "\n" ), "\n", $var );
+                    $sep = "\n";
+                }
+                elseif( $sep == '\t' ){
+                    $sep = "\t";
+                }
+                else{
+                    $use_preg=1;
+                }
+
+                if( $var ){
+                    if( $use_preg ){
+                        $arr_vars = array_map( "trim", preg_split( "/(?<!\\\)".preg_quote($sep, '/')."/", $var ) ); // allows escaping of separator with a backslash
+                    }
+                    else{
+                        $arr_vars = array_map( "trim", explode( $sep, $var ) );
+                    }
+
+                }
+
+                if( is_array($arr_vars) ){
+                    $cnt_arr = count($arr_vars);
+                    $CTX->set( 'k_total_items', $cnt_arr );
+                    $children = $node->children;
+
+                    for( $x=0; $x<count($arr_vars); $x++ ){
+                        $CTX->set( 'k_count', $x + $startcount );
+                        $CTX->set( 'k_first_item', ($x==0) ? '1' : '0' );
+                        $CTX->set( 'k_last_item', ($x==$cnt_arr-1) ? '1' : '0' );
+                        $CTX->set( $key, $x );
+                        if( $use_preg ){
+                            $CTX->set( $as, str_replace( '\\'.$sep, $sep, $arr_vars[$x] ) ); //unescape separator
+                        }
+                        else{
+                            $CTX->set( $as, $arr_vars[$x] );
+                        }
+
+                        // setup a way for the child nodes to signal 'break' or 'continue'
+                        $arr_config = array( 'break'=>0, 'continue'=>0 );
+                        $CTX->set_object( '__config', $arr_config );
+
+                        // HOOK: each_alter_ctx_xxx
+                        if( $token ){
+                            $FUNCS->dispatch_event( 'each_alter_ctx_'.$token, array($x /*key*/, $arr_vars[$x] /*value*/, $params, $node) );
+                        }
+
+                        foreach( $children as $child ){
+                            $html .= $child->get_HTML();
+
+                            if( $child->type==K_NODE_TYPE_CODE){
+                                if( $arr_config['break'] ){ $count++; break 2; }
+                                if( $arr_config['continue'] ){ $count++; continue 2; }
+                            }
+                        }
+                    }
+                }
             }
             else{
-                $use_preg=1;
+                $cnt_arr = count($var);
+                $CTX->set( 'k_total_items', $cnt_arr );
+                $children = $node->children;
+
+                $count = 0;
+                foreach( $var as $k=>$v ){
+                    $CTX->set( 'k_count', $count + $startcount );
+                    $CTX->set( 'k_first_item', ($count==0) ? '1' : '0' );
+                    $CTX->set( 'k_last_item', ($count==$cnt_arr-1) ? '1' : '0' );
+                    $CTX->set( $key, $k );
+                    $CTX->set( $as, $v );
+
+                    // setup a way for the child nodes to signal 'break' or 'continue'
+                    $arr_config = array( 'break'=>0, 'continue'=>0 );
+                    $CTX->set_object( '__config', $arr_config );
+
+                    // HOOK: each_alter_ctx_xxx
+                    if( $token ){
+                        $FUNCS->dispatch_event( 'each_alter_ctx_'.$token, array($k /*key*/, $v /*value*/, $params, $node) );
+                    }
+
+                    foreach( $children as $child ){
+                        $html .= $child->get_HTML();
+
+                        if( $child->type==K_NODE_TYPE_CODE){
+                            if( $arr_config['break'] ){ $count++; break 2; }
+                            if( $arr_config['continue'] ){ $count++; continue 2; }
+                        }
+                    }
+
+                    $count++;
+                }
             }
 
-            if( $var ){
-                if( $use_preg ){
-                    $arr_vars = array_map( "trim", preg_split( "/(?<!\\\)\\".$sep."/", $var ) ); // allows escaping of separator with a backslash
-                }
-                else{
-                    $arr_vars = array_map( "trim", explode( $sep, $var ) );
-                }
-
-            }
-
-            $children = $node->children;
-            for( $x=0; $x<count($arr_vars); $x++ ){
-                $CTX->set( 'k_count', $x );
-                if( $use_preg ){
-                    $CTX->set( $as, str_replace( '\\'.$sep, $sep, $arr_vars[$x] ) ); //unescape separator
-                }
-                else{
-                    $CTX->set( $as, $arr_vars[$x] );
-                }
-
-                foreach( $children as $child ){
-                    $html .= $child->get_HTML();
-                }
-            }
             return $html;
+        }
+
+        function k_break( $params, $node ){
+            global $CTX;
+            if( count($node->children) ) {die("ERROR: Tag \"break\" is a self closing tag");}
+
+            // get the 'config' object supplied by 'cms:each' tag
+            $arr_config = &$CTX->get_object( '__config', 'each' );
+            if( is_array($arr_config) && isset($arr_config['break']) ){
+                $arr_config['break']=1;
+            }
+        }
+
+        function k_continue( $params, $node ){
+            global $CTX;
+            if( count($node->children) ) {die("ERROR: Tag \"continue\" is a self closing tag");}
+
+            // get the 'config' object supplied by 'cms:each' tag
+            $arr_config = &$CTX->get_object( '__config', 'each' );
+            if( is_array($arr_config) && isset($arr_config['continue']) ){
+                $arr_config['continue']=1;
+            }
+        }
+
+        function is_array( $params, $node ){
+            global $CTX;
+            if( count($node->children) ) {die("ERROR: Tag \"".$node->name."\" is a self closing tag");}
+
+            return is_array( $params[0]['rhs'] ) ? '1' : '0';
+        }
+
+        function array_count( $params, $node ){
+            global $CTX;
+            if( count($node->children) ) {die("ERROR: Tag \"".$node->name."\" is a self closing tag");}
+
+            return is_array( $params[0]['rhs'] ) ? count($params[0]['rhs']) : '0';
         }
 
         function embed( $params, $node ){
@@ -570,6 +745,9 @@
                     $valid_files[] = 'default';
                 }
 
+                // HOOK: alter_smart_embed_valid_files
+                $FUNCS->dispatch_event( 'alter_smart_embed_valid_files', array(&$valid_files, $tplname, $view) );
+
                 // Cache results
                 $FUNCS->cached_valid_files_for_view = $valid_files;
             }
@@ -628,7 +806,7 @@
 
         }
 
-        // checks for the existence of a file reative to the 'snippets' folder
+        // checks for the existence of a file relative to the 'snippets' folder
         function exists( $params, $node ){
             global $CTX;
             if( count($node->children) ) {die("ERROR: Tag \"".$node->name."\" is a self closing tag");}
@@ -668,7 +846,7 @@
             if( strlen($id) && !$FUNCS->is_non_zero_natural($id) ) $id='';
 
 
-            if( $name ){
+            if( $name!='' ){
                 $sql = "t.id = p.template_id and t.name='" . $DB->sanitize( $masterpage ) . "' and page_name='" . $DB->sanitize( $name ). "'";
             }
             else{ //id
@@ -703,7 +881,7 @@
             $id = trim( $id );
             if( strlen($id) && !$FUNCS->is_non_zero_natural($id) ) $id='';
 
-            if( $name ){
+            if( $name!='' ){
                 $sql = "t.id = f.template_id and t.name='" . $DB->sanitize( $masterpage ) . "' and f.name='" . $DB->sanitize( $name ). "'";
             }
             else{
@@ -728,6 +906,7 @@
                         array(
                                'masterpage'=>'',
                                'page'=>'',
+                               'page_id'=>'',
                                'folder'=>'',
                                'year'=>'',
                                'month'=>'',
@@ -741,20 +920,26 @@
             if( $masterpage=='' ){ return; } // No masterpage, no link
 
             $page = trim( $page );
+            $page_id = trim( $page_id );
             $folder = trim( $folder );
             $year = trim( $year );
             $month = trim( $month );
             $day = trim( $day );
 
-            if( $page ){
+            if( $page!='' || $page_id!='' ){
                 // page-view
-                $sql = "t.id = p.template_id and t.name='" . $DB->sanitize( $masterpage ) . "' and page_name='" . $DB->sanitize( $page ). "'";
+                if( $page!='' ){
+                    $sql = "t.id = p.template_id and t.name='" . $DB->sanitize( $masterpage ) . "' and p.page_name='" . $DB->sanitize( $page ). "'";
+                }
+                else{
+                    $sql = "t.id = p.template_id and t.name='" . $DB->sanitize( $masterpage ) . "' and p.id='" . $DB->sanitize( $page_id ). "'";
+                }
                 $rs = $DB->select( K_TBL_TEMPLATES . ' t, ' . K_TBL_PAGES . ' p ', array('t.id as tid', 'p.id as pid'), $sql );
                 if( count($rs) ){
                     $tid = $rs[0]['tid'];
                     $pid = $rs[0]['pid'];
                     if( K_PRETTY_URLS ){
-                        $pg = new KWebpage( $tid, $pid );
+                        $pg = new KWebpage( $tid, $pid, 0, 0, 1 );
                         if( $pg->error ){ return; }
                         $pg->set_context();
                         return $CTX->get( 'k_page_link', 1 );
@@ -764,7 +949,7 @@
                     }
                 }
             }
-            elseif( $folder ){
+            elseif( $folder!='' ){
                 // folder-view
                 $sql = "t.id = f.template_id and t.name='" . $DB->sanitize( $masterpage ) . "' and f.name='" . $DB->sanitize( $folder ). "'";
                 $rs = $DB->select( K_TBL_TEMPLATES . ' t, ' . K_TBL_FOLDERS . ' f ', array('t.id as tid', 'f.id as fid', 'f.pid as pid'), $sql );
@@ -870,8 +1055,9 @@
             // sanitize params
             $link = trim( $link );
             $querystring = trim( $querystring );
-
-            $sep = ( strpos($link, '?')===false ) ? '?' : '&';
+            if( $querystring ){
+                $sep = ( strpos($link, '?')===false ) ? '?' : '&';
+            }
             return $link . $sep . $querystring;
         }
 
@@ -879,8 +1065,7 @@
             global $FUNCS;
             $children = $node->children;
 
-            $cond = $FUNCS->resolve_condition( $node->attributes );
-            if( eval("return ".$cond.";") ){
+            if( $FUNCS->resolve_condition( $node->attributes ) ){
                 foreach( $children as $child ){
                     if( $child->type == K_NODE_TYPE_CODE && ($child->name == 'else' || $child->name == 'else_if') ){ break; }
                     $html .= $child->get_HTML();
@@ -898,8 +1083,7 @@
                                 $ok = true;
                             }
                             else{
-                                $cond = $FUNCS->resolve_condition( $child->attributes );
-                                if( eval("return ".$cond.";") ){
+                                if( $FUNCS->resolve_condition( $child->attributes ) ){
                                     $ok = true;
                                 }
                             }
@@ -917,8 +1101,7 @@
             global $FUNCS;
             if( count($node->children) ) {die("ERROR: Tag \"".$node->name."\" is a self closing tag");}
 
-            $cond = $FUNCS->resolve_condition( $node->attributes );
-            return ( eval("return ".$cond.";") ) ? 0 : 1;
+            return ( $FUNCS->resolve_condition( $node->attributes ) ) ? 0 : 1;
         }
 
         function k_else( $params, $node ){
@@ -935,8 +1118,10 @@
 
             $safety = 0;
             $cond = $FUNCS->resolve_condition( $node->attributes );
-            while( eval("return ".$cond.";") ){
+            while( $cond ){
                 if( ++$safety > 1000 ){ die("Infinite while loop"); }
+
+                $CTX->set( 'k_count', $safety );
                 foreach( $children as $child ){
                     $html .= $child->get_HTML();
                 }
@@ -978,6 +1163,8 @@
             if( $node->attributes[0]['value_type']!=K_VAL_TYPE_VARIABLE ) die( "ERROR: Tag \"".$node->name."\": First parameter should be a variable" );
             $var = $node->attributes[0]['value'];
             $p0 = $params[0]['rhs'];
+            if( is_array($p0) ) return;
+
             $p1 = isset($params[1]['rhs']) ? $params[1]['rhs'] : 1;
             $CTX->set( $var, $p0+$p1, 'parent' );
 
@@ -991,6 +1178,8 @@
             if( $node->attributes[0]['value_type']!=K_VAL_TYPE_VARIABLE ) die( "ERROR: Tag \"".$node->name."\": First parameter should be a variable" );
             $var = $node->attributes[0]['value'];
             $p0 = $params[0]['rhs'];
+            if( is_array($p0) ) return;
+
             $p1 = isset($params[1]['rhs']) ? $params[1]['rhs'] : 1;
             $CTX->set( $var, $p0-$p1, 'parent' );
 
@@ -1002,6 +1191,7 @@
             $p0 = $params[0]['rhs'];
             $p1 = $params[1]['rhs'];
 
+            if( is_array($p0) || is_array($p1) ) return;
             return $p0 * $p1;
         }
 
@@ -1010,6 +1200,7 @@
             $p0 = $params[0]['rhs'];
             $p1 = $params[1]['rhs'];
 
+            if( is_array($p0) || is_array($p1) ) return;
             return $p0 / $p1;
         }
 
@@ -1018,6 +1209,7 @@
             $p0 = $params[0]['rhs'];
             $p1 = $params[1]['rhs'];
 
+            if( is_array($p0) || is_array($p1) ) return;
             return $p0 + $p1;
         }
 
@@ -1026,6 +1218,7 @@
             $p0 = $params[0]['rhs'];
             $p1 = $params[1]['rhs'];
 
+            if( is_array($p0) || is_array($p1) ) return;
             return $p0 - $p1;
         }
 
@@ -1034,6 +1227,7 @@
             $p0 = $params[0]['rhs'];
             $p1 = $params[1]['rhs'];
 
+            if( is_array($p0) || is_array($p1) ) return;
             return $p0 % $p1;
         }
 
@@ -1098,6 +1292,7 @@
                 'disable_uploader'=>'0',
                 'dynamic'=>'',
                 'class'=>'',
+                'not_active'=>null,
 
                 /* used only by repeatable */
                 'col_width'=>'',
@@ -1129,7 +1324,7 @@
                                                       'k_order'=>'', 'k_group'=>'', 'k_separator'=>'', 'page'=>'', 'siblings'=>'', 'processed'=>'',
                                                       'system'=>'', 'err_msg'=>'', 'modified'=>'', 'udf'=>'',
                                                       'cached'=>'', 'refresh_form'=>'', 'err_msg_refresh'=>'', 'requires_multipart'=>'', 'trust_mode'=>'', 'no_js'=>'',
-                                                      'available_validators'=>'', 'available_buttons'=>'' ), $core_params );
+                                                      'available_validators'=>'', 'available_buttons'=>'', 'k_inactive'=>'' ), $core_params );
                     foreach( $attr_udf as $k=>$v ){
                         if( array_key_exists($k, $core_params) ){
                             unset( $attr_udf[$k] );
@@ -1175,7 +1370,7 @@
             $attr['assoc_field'] = trim( $attr['assoc_field'] );
             $attr['crop'] = abs( (int)$attr['crop'] );
             $attr['enforce_max'] = trim( $attr['enforce_max'] );
-            if( $attr['type']=='image' && ($attr['enforce_max']!='1' && $attr['enforce_max']!='0') ) $attr['enforce_max']=1;
+            if( ($attr['type']=='image' || $attr['type']=='securefile') && ($attr['enforce_max']!='1' && $attr['enforce_max']!='0') ) $attr['enforce_max']=1;
             if( $attr['type']=='thumbnail' && ($attr['enforce_max']!='1' && $attr['enforce_max']!='0') ) $attr['enforce_max']=0;
             $attr['enforce_max'] = abs( (int)$attr['enforce_max'] );
             $attr['quality'] = (int)$attr['quality'];
@@ -1191,6 +1386,9 @@
             $attr['dynamic'] = trim( $attr['dynamic'] );
             $attr['searchable'] = abs( (int)$attr['searchable'] );
             $attr['class'] = trim( $attr['class'] );
+            if( !is_null($attr['not_active']) ){
+                $attr['not_active'] =  base64_encode( serialize(array('val'=>$attr['not_active'])) );
+            }
 
             // Save a backup of all the parameters used to create this field.
             $tag = '<cms:editable';
@@ -1220,28 +1418,47 @@
             extract( $attr );
 
             if( !$name ) {die("ERROR: Tag \"".$node->name."\" needs a 'name' attribute");}
+            if( !$FUNCS->is_title_clean($name) ){
+                die( "ERROR: Tag \"".$node->name."\": 'name' attribute ({$name}) contains invalid characters. (Only lowercase[a-z], numerals[0-9], hyphen and underscore permitted.)" );
+            }
             $found = 0;
-            for( $x=0; $x<count($PAGE->fields); $x++ ){
-                $field = &$PAGE->fields[$x];
-                if( strtoupper($field->name) == strtoupper($name) ){
-                    $found = 1;
-                    break;
-                }
+            if( isset($PAGE->_fields[$name]) ){
+                $found = 1;
+                $field = $PAGE->_fields[$name];
             }
 
             // if type 'group' used as a tag-pair, find all immediate child editable regions and set this as their parent
             if( $type=='group' && count($node->children) ){
+                $attr_not_active = null;
+                foreach( $node->attributes as $node_attr ){
+                    if( $node_attr['name']=='not_active' ){
+                        $attr_not_active = $node_attr;
+                        break;
+                    }
+                }
+
                 for( $x=0; $x<count($node->children); $x++ ){
                     $child = &$node->children[$x];
 
-                    if( $child->type==K_NODE_TYPE_CODE && ($child->name=='editable' || $child->name=='repeatable') ){
+                    if( $child->type==K_NODE_TYPE_CODE && ($child->name=='editable' || $child->name=='repeatable' || $child->name=='mosaic') ){
                         $arr_tmp = array();
+                        $child_attr_not_active = null;
+
                         foreach( $child->attributes as $child_attr ){
                             if( $child_attr['name']!='group' ){
+                                if( $child_attr['name']=='not_active' ){
+                                    $child_attr_not_active = 1;
+                                }
+                                elseif( $child_attr['name']=='type' && $child_attr['value']=='group' ){
+                                    die( "ERROR: Type 'group' editable cannot have another 'group' nested within it." );
+                                }
                                 $arr_tmp[] = $child_attr;
                             }
                         }
-                        $arr_tmp[] = array( name=>'group', op=>'=', quote_type=>"'", value=>$name, value_type=>K_VAL_TYPE_LITERAL);
+                        $arr_tmp[] = array( 'name'=>'group', 'op'=>'=', 'quote_type'=>"'", 'value'=>$name, 'value_type'=>K_VAL_TYPE_LITERAL);
+                        if( $attr_not_active && !$child_attr_not_active ){
+                            $arr_tmp[] = $attr_not_active;
+                        }
                         $child->attributes = $arr_tmp;
                     }
                     unset( $child );
@@ -1252,7 +1469,11 @@
                 $html .= $child->get_HTML();
             }
 
-            if( $found ){
+            // check for failure in the past run of this routine
+            $lock_file = K_COUCH_DIR . 'cache/' . '$$'.$PAGE->tpl_id.'-'.$attr['name'];
+            $prev_failed = file_exists( $lock_file ); // presence of this file indicates previous failure
+
+            if( $found && !$prev_failed ){
                 if( !$field->system ){
 
                     if( $AUTH->user->access_level >= K_ACCESS_LEVEL_SUPER_ADMIN ){
@@ -1378,63 +1599,83 @@
                     }
                     $DB->begin();
 
-                    // Create a new record for this field in K_TBL_FIELDS. This stores only the meta.
-                    $fields = array(
-                                   'template_id'=>$PAGE->tpl_id,
-                                   'name'=>$attr['name'],
-                                   'label'=>$attr['label'],
-                                   'k_desc'=>$attr['desc'],
-                                   'k_type'=>$attr['type'],
-                                   'hidden'=>$attr['hidden'],
-                                   'search_type'=>$attr['search_type'],
-                                   'k_order'=>$attr['order'],
-                                   'default_data'=>$html,
-                                   'required'=>$attr['required'],
-                                   'deleted'=>'0',
-                                   'validator'=>$attr['validator'],
-                                   'validator_msg'=>$attr['validator_msg'],
-                                   'k_separator'=>$attr['separator'],
-                                   'val_separator'=>$attr['val_separator'],
-                                   'opt_values'=>$attr['opt_values'],
-                                   'opt_selected'=>$attr['opt_selected'],
-                                   'toolbar'=>$attr['toolbar'],
-                                   'custom_toolbar'=>$attr['custom_toolbar'],
-                                   'css'=>$attr['css'],
-                                   'custom_styles'=>$attr['custom_styles'],
-                                   'maxlength'=>$attr['maxlength'],
-                                   'height'=>$attr['height'],
-                                   'width'=>$attr['width'],
-                                   'k_group'=>($attr['type']=='group') ? '' : $attr['group'],
-                                   'collapsed'=>$attr['collapsed'],
-                                   'assoc_field'=>$attr['assoc_field'],
-                                   'crop'=>$attr['crop'],
-                                   'enforce_max'=>$attr['enforce_max'],
-                                   'quality'=>$attr['quality'],
-                                   'show_preview'=>$attr['show_preview'],
-                                   'preview_width'=>$attr['preview_width'],
-                                   'preview_height'=>$attr['preview_height'],
-                                   'no_xss_check'=>$attr['no_xss_check'],
-                                   'rtl'=>$attr['rtl'],
-                                   'body_id' => $attr['body_id'],
-                                   'body_class' => $attr['body_class'],
-                                   'disable_uploader' => $attr['disable_uploader'],
-                                   '_html' => $tag,
-                                   'dynamic' => $attr['dynamic'],
-                                   'class' => $attr['class'],
-
-                                  );
-                    if( $is_udf && count($attr_udf) ){
-                        $fields['custom_params'] = $FUNCS->serialize($attr_udf);
+                    // first check if any previous run of this routine ended abnormally
+                    $skip_insert = $fp = 0;
+                    if( $prev_failed ){
+                        // did the failure occurr before record for the field was inserted in K_TBL_FIELDS?
+                        $rs = $DB->select( K_TBL_FIELDS, array('*'), "template_id='" . $DB->sanitize( $PAGE->tpl_id ). "' and name='" . $DB->sanitize( $attr['name'] ) . "'" );
+                        if( count($rs) ){
+                            $skip_insert=1;
+                            $field_id = $rs[0]['id'];
+                        }
+                    }
+                    else{
+                        // leave a tell-tale sign in case this routine fails mid-way processing the code to follow
+                        $fp = @fopen( $lock_file, 'x+b' );
+                        if( $fp===FALSE ){} // do what??
                     }
 
-                    // HOOK: alter_field_insert
-                    $FUNCS->dispatch_event( 'alter_field_insert', array(&$fields, $attr, $is_udf, $params, $node) );
+                    if( !$skip_insert ){
+                        // Create a new record for this field in K_TBL_FIELDS. This stores only the meta.
+                        $fields = array(
+                                       'template_id'=>$PAGE->tpl_id,
+                                       'name'=>$attr['name'],
+                                       'label'=>$attr['label'],
+                                       'k_desc'=>$attr['desc'],
+                                       'k_type'=>$attr['type'],
+                                       'hidden'=>$attr['hidden'],
+                                       'search_type'=>$attr['search_type'],
+                                       'k_order'=>$attr['order'],
+                                       'default_data'=>$html,
+                                       'required'=>$attr['required'],
+                                       'deleted'=>'0',
+                                       'validator'=>$attr['validator'],
+                                       'validator_msg'=>$attr['validator_msg'],
+                                       'k_separator'=>$attr['separator'],
+                                       'val_separator'=>$attr['val_separator'],
+                                       'opt_values'=>$attr['opt_values'],
+                                       'opt_selected'=>$attr['opt_selected'],
+                                       'toolbar'=>$attr['toolbar'],
+                                       'custom_toolbar'=>$attr['custom_toolbar'],
+                                       'css'=>$attr['css'],
+                                       'custom_styles'=>$attr['custom_styles'],
+                                       'maxlength'=>$attr['maxlength'],
+                                       'height'=>$attr['height'],
+                                       'width'=>$attr['width'],
+                                       'k_group'=>($attr['type']=='group') ? '' : $attr['group'],
+                                       'collapsed'=>$attr['collapsed'],
+                                       'assoc_field'=>$attr['assoc_field'],
+                                       'crop'=>$attr['crop'],
+                                       'enforce_max'=>$attr['enforce_max'],
+                                       'quality'=>$attr['quality'],
+                                       'show_preview'=>$attr['show_preview'],
+                                       'preview_width'=>$attr['preview_width'],
+                                       'preview_height'=>$attr['preview_height'],
+                                       'no_xss_check'=>$attr['no_xss_check'],
+                                       'rtl'=>$attr['rtl'],
+                                       'body_id' => $attr['body_id'],
+                                       'body_class' => $attr['body_class'],
+                                       'disable_uploader' => $attr['disable_uploader'],
+                                       '_html' => $tag,
+                                       'dynamic' => $attr['dynamic'],
+                                       'class' => $attr['class'],
+                                       'not_active' => $attr['not_active'],
 
-                    $rs = $DB->insert( K_TBL_FIELDS, $fields );
-                    if( $rs==-1 ) die( "ERROR: Unable to insert record in K_TBL_FIELDS" );
-                    $field_id = $DB->last_insert_id;
-                    $rs = $DB->select( K_TBL_FIELDS, array('*'), "id='" . $DB->sanitize( $field_id ) . "'" );
-                    if( !count($rs) ) die( "ERROR: Failed to insert record in K_TBL_FIELDS" );
+                                      );
+                        if( $is_udf && count($attr_udf) ){
+                            $fields['custom_params'] = $FUNCS->serialize($attr_udf);
+                        }
+
+                        // HOOK: alter_field_insert
+                        $FUNCS->dispatch_event( 'alter_field_insert', array(&$fields, $attr, $is_udf, $params, $node) );
+
+                        $rs = $DB->insert( K_TBL_FIELDS, $fields );
+                        if( $rs==-1 ) die( "ERROR: Unable to insert record in K_TBL_FIELDS" );
+                        $field_id = $DB->last_insert_id;
+                        $rs = $DB->select( K_TBL_FIELDS, array('*'), "id='" . $DB->sanitize( $field_id ) . "'" );
+                        if( !count($rs) ) die( "ERROR: Failed to insert record in K_TBL_FIELDS" );
+
+                    }
 
                     if( $is_udf ){
                         $classname = $FUNCS->udfs[$attr['type']]['handler'];
@@ -1445,11 +1686,25 @@
                     }
                     $f->processed = 1;
                     $PAGE->fields[] = $f;
+                    $PAGE->_fields[$attr['name']] = $f;
+
+                    // ** Following portion of the code can cause the script to timeout if there are too many existing pages to add the data fields to **
 
                     // Create a field record for each existing page. This is for storage.
-                    $rs = $DB->select( K_TBL_PAGES, array('*'), "template_id='" . $DB->sanitize( $PAGE->tpl_id ). "'" );
+                    $to_table = ( $f->search_type=='text' ) ? K_TBL_DATA_TEXT : K_TBL_DATA_NUMERIC;
+
+                    @set_time_limit( 0 ); // make server wait
+                    $start_time = time();
+
+                    if( $prev_failed ){
+                        $stagger_limit = 500; // number of pages processed in a single run. Might require tweaking if script still times out
+                        $rs = $DB->select( K_TBL_PAGES . " p LEFT OUTER JOIN " . $to_table . " d ON (p.id = d.page_id AND d.field_id='". $DB->sanitize( $field_id ) ."')", array('*'), "p.template_id = '". $DB->sanitize( $PAGE->tpl_id ). "' AND d.page_id IS NULL LIMIT 0, ".$stagger_limit );
+                    }
+                    else{
+                        $rs = $DB->select( K_TBL_PAGES, array('*'), "template_id='" . $DB->sanitize( $PAGE->tpl_id ). "'" );
+                    }
+
                     if( count($rs) ){
-                        $to_table = ( $f->search_type=='text' ) ? K_TBL_DATA_TEXT : K_TBL_DATA_NUMERIC;
                         foreach( $rs as $rec ){
                             $arr_to_fields = array('page_id'=>$rec['id'],
                                         'field_id'=>$field_id,
@@ -1470,6 +1725,29 @@
                                 $f->_create( $rec['id'], 1 );
                             }
 
+                            $cur_time = time();
+                            if( $cur_time + 25 > $start_time ){
+                                header( "X-Dummy: wait" ); // make browser wait
+                                $start_time = $cur_time;
+                            }
+                        }
+
+                        if( $prev_failed ){
+                            // end script and refresh current page to process next batch of records in a staggered manner
+                            ob_end_clean();
+                            $DB->commit( 1 );
+
+                            $cnt = ( isset($_GET['__cnt__']) && $FUNCS->is_non_zero_natural($_GET['__cnt__']) ) ? (int)$_GET['__cnt__'] : 0;
+                            $dst = $CTX->get( 'k_page_link' );
+                            $sep = ( strpos($dst, '?')===false ) ? '?' : '&';
+                            $dst = $dst . $sep . '__cnt__=' . ++$cnt;
+                            $html="
+                                <script language=\"JavaScript\" type=\"text/javascript\">
+                                    window.setTimeout( 'location.href=\"".$dst."\";', 100 );
+                                </script>
+                                Modifying schema. Could take some time. Please wait...(processed: ".$cnt*$stagger_limit." pages)
+                            ";
+                            die( $html );
                         }
                     }
 
@@ -1477,6 +1755,17 @@
                     $FUNCS->dispatch_event( 'field_inserted', array( &$f, $is_udf, &$PAGE, $params, $node) );
 
                     $DB->commit();
+
+                    if( $prev_failed ){
+                        $rs = @unlink( $lock_file );
+                        if( $rs ){ $AUTH->redirect( $CTX->get('k_page_link') ); }
+                    }
+                    else{
+                        if( $fp ){
+                            fclose( $fp );
+                            @unlink( $lock_file );
+                        }
+                    }
 
                     if( !$hidden && !($PAGE->is_master && $PAGE->tpl_is_clonable) ){
                         if( !($field->k_type=='hidden' || $field->k_type=='message' || $field->k_type=='group') ){
@@ -1651,8 +1940,8 @@
             if( $order!='desc' && $order!='asc' ) $order = 'asc';
 
             // query
-            if( !$show_hidden ) $sql = 'hidden <> 1 and ';
-            $sql .= '1=1 ORDER BY '.$orderby.' '.$order.', id '. $order;
+            if( !$show_hidden ) $sql = 'hidden < 1 and ';
+            $sql .= 'ISNULL(type) || type=\'\' ORDER BY '.$orderby.' '.$order.', id '. $order;
             $rs = $DB->select( K_TBL_TEMPLATES, array('*'), $sql );
             if( count($rs) ){
                 $count = count($rs);
@@ -1731,6 +2020,7 @@
 
                                'base_link'=>'', /* replaces the default $PAGE->link used for paginator crumb links */
                                'token'=>'',
+                               'adjust'=>'0', /* to handle non-uniform pagination limit */
                               ),
                         $params);
 
@@ -1761,6 +2051,7 @@
             $aggregate_by = trim( $aggregate_by );
             $base_link = trim( $base_link );
             $token = trim( $token );
+            $adjust = $FUNCS->is_int( $adjust ) ? intval( $adjust ) : 0;
 
             $qs_param = trim( $qs_param );
             if( $qs_param=='' ){
@@ -1834,12 +2125,12 @@
                 }
 
                 // name?
-                if( $page_name ){
+                if( $page_name!='' ){
                     $sql .= $FUNCS->gen_sql( $page_name, 'p.page_name');
                 }
 
                 // title?
-                if( $page_title ){
+                if( $page_title!='' ){
                     $sql .= $FUNCS->gen_sql( $page_title, 'p.page_title');
                 }
 
@@ -2357,7 +2648,9 @@
                 if( $hide_future_entries ){
                     $sql .= " AND cp.publish_date < '".$FUNCS->get_current_desktop_time()."'";
                 }
-                $sql .= " AND NOT cp.publish_date = '0000-00-00 00:00:00'";
+                if( !$show_unpublished ){
+                    $sql .= " AND NOT cp.publish_date = '0000-00-00 00:00:00'";
+                }
                 $sql .= " AND cp.access_level<='".$AUTH->user->access_level."'";
                 $sql .= " AND ct.executable=1";
 
@@ -2393,7 +2686,7 @@
                 if( $page_id ){
                     $sql .= $FUNCS->gen_sql( $page_id, 'cc.page_id', 1);
                 }
-                if( $page_name ){
+                if( $page_name!='' ){
                     //$query_table .= "\n inner join couch_pages cp on cp.id=cc.page_id";
                     $sql .= $FUNCS->gen_sql( $page_name, 'cp.page_name');
                 }
@@ -2433,7 +2726,7 @@
             } // end mode==2 (comments)
 
             // limit
-            $limit_sql = sprintf( "%d, %d", (($pgn_pno - 1) * $limit)+$offset, $limit );
+            $limit_sql = sprintf( "%d, %d", (($pgn_pno - 1) * $limit)+$offset+$adjust, $limit );
 
 
             // We have the sql query here..
@@ -2556,7 +2849,7 @@
                     return $html;
                 }
                 else{
-                    $sql .= ' ORDER BY ' . $order_sql;
+                    if( strlen($order_sql) ) $sql .= ' ORDER BY ' . $order_sql;
                     $sql .= ' LIMIT ' . $limit_sql;
                     $rs = $DB->select( $query_table, $query_fields, $sql, $distinct );
                 }
@@ -2579,6 +2872,7 @@
             }
 
             $total_rows -= $offset;
+            $total_rows -= $adjust;
             $total_pages = ceil( $total_rows/$limit );
 
             $count = count($rs);
@@ -2670,9 +2964,11 @@
 
                     // Pagination related variables
                     $first_record_on_page = ($limit * ($pgn_pno - 1)) + $startcount;
+                    if( $adjust ){ $first_record_on_page += $adjust; };
                     $total_records_on_page = ( $count<$limit ) ? $count : $limit;
                     $CTX->set( 'k_count', $x + $startcount );
-                    $CTX->set( 'k_total_records', $total_rows );
+                    $CTX->set( 'k_total_records', ( $adjust ) ? $total_rows+$adjust : $total_rows );
+                    $CTX->set( 'k_total_records_for_pagination', $total_rows );
                     $CTX->set( 'k_total_records_on_page', $total_records_on_page );
                     $CTX->set( 'k_current_record', $first_record_on_page + $x );
                     $CTX->set( 'k_absolute_count', $first_record_on_page + $x ); //same as current record
@@ -2906,6 +3202,10 @@ FORM;
                     $arr = array_slice( $arr, 0, -1 );
                 }
                 $html = implode( ' ', $arr );
+
+                if( $sep ){ // Trim off trailing punctuation
+                    $html = rtrim( $html, ',:;!?.' );
+                }
             }
 
             return $html . $sep;
@@ -3325,6 +3625,7 @@ FORM;
             // set vars for 'paginator tag'
             $CTX->set( 'k_current_page', $node->_current_page );
             $CTX->set( 'k_total_records', $node->_total_records );
+            $CTX->set( 'k_total_records_for_pagination', $node->_total_records );
             $CTX->set( 'k_paginate_limit', $node->_paginate_limit );
             if( $x==1 ){
                 $CTX->set( 'k_paginated_top', 1 );
@@ -3598,7 +3899,7 @@ FORM;
             if( $orderby =='weight' ) $orderby ='weightx';
             $order = strtolower( trim($order) );
             if( $order!='desc' && $order!='asc' ) $order = 'asc';
-            $exclude = ( $exclude ) ? array_map( "trim", explode( ",", $exclude ) ) : array();
+            $exclude = ( $exclude!='' ) ? array_map( "trim", explode( ",", $exclude ) ) : array();
             $extended_info = ( $extended_info==1 ) ? 1 : 0;
             if( $variation==1 ) $extended_info = 1; // always 1 with 'menu'
             $ignore_show_in_menu = ( $ignore_show_in_menu==1 ) ? 1 : 0;
@@ -4432,6 +4733,12 @@ FORM;
                     $content_field = 'content';
                 }
 
+                $arr_vars['k_field_is_last'] = ( $x==$total_items-1 ) ? 1 : 0;
+                $arr_vars['k_field_count'] = $x + $startcount;
+                $arr_vars['k_total_fields'] = $total_items;
+
+                $CTX->set_all( $arr_vars );
+
                 //$arr_vars['k_field_header'] = $item['header'];
                 //$arr_vars['k_field_content'] = $item['content'];
                 $arr = $item[$content_field];
@@ -4440,17 +4747,12 @@ FORM;
                     foreach( $arr as $child ){
                         $html2 .= $child->get_HTML();
                     }
-                    $arr_vars['k_field_'.$content_field] = $html2;
+                    $content = $html2;
                 }
                 else{
-                    $arr_vars['k_field_'.$content_field] = '';
+                    $content = '';
                 }
-
-                $arr_vars['k_field_is_last'] = ( $x==$total_items-1 ) ? 1 : 0;
-                $arr_vars['k_field_count'] = $x + $startcount;
-                $arr_vars['k_total_fields'] = $total_items;
-
-                $CTX->set_all( $arr_vars );
+                $CTX->set( 'k_field_'.$content_field, $content );
 
                 // and call the children providing each row's data
                 foreach( $node->children as $child ){
@@ -4519,6 +4821,16 @@ FORM;
             $FUNCS->add_html( $code );
         }
 
+        function admin_add_meta( $params, $node ){
+            global $FUNCS;
+
+            foreach( $node->children as $child ){
+                $code .= $child->get_HTML();
+            }
+
+            $FUNCS->add_meta( $code );
+        }
+
         function admin_js( $params, $node ){
             global $FUNCS;
 
@@ -4572,6 +4884,12 @@ FORM;
             global $FUNCS;
 
             return $FUNCS->get_html();
+        }
+
+        function admin_meta( $params, $node ){
+            global $FUNCS;
+
+            return $FUNCS->get_meta();
         }
 
         function admin_route_link( $params, $node ){
@@ -4859,36 +5177,9 @@ FORM;
                         $params)
                    );
 
-            if( trim($date)=='' ) $date = $FUNCS->get_current_desktop_time();
-            $gmt = ( $gmt==1 ) ? 1 : 0;
-            $locale = trim( $locale );
-            $charset = trim( $charset );
+            $date = $FUNCS->date( $date, $format, $locale, $charset, $gmt );
 
-            //TODO: localization
-            $ts = ( $gmt ) ? @strtotime($date) - (K_GMT_OFFSET * 60 * 60) :  @strtotime($date);
-
-            if( strpos($format, "%")===FALSE ){
-                return @date( $format, $ts );
-            }
-            else{// use strftime
-                if( $locale ){
-                    $orig_locale = setlocale(LC_ALL, "0");
-                    @setlocale(LC_ALL, $locale);
-                }
-
-                $val = @strftime( $format, $ts );
-
-                if( $locale ){
-                    @setlocale(LC_ALL, $orig_locale);
-                }
-                if( $charset ){
-                    if( function_exists('iconv') ){
-                        $val = @iconv( $charset, 'UTF-8', $val );
-                    }
-                }
-
-                return $val;
-            }
+            return $date;
         }
 
         // Given a string containing an English date format in 'str', this tag will parse it and return a date in 'Y-m-d H:i:s' format
@@ -5056,7 +5347,7 @@ FORM;
                     $charset = trim($params[$x]['rhs']);
                     continue;
                 }
-                elseif( $attr=='masterpage' || $attr=='page_id' || $attr=='mode' || $attr=='token' ){ // Data-bound form's parameters
+                elseif( $attr=='masterpage' || $attr=='page_id' || $attr=='mode' || $attr=='token' || $attr=='validate_bound' ){ // Data-bound form's parameters
                     $$attr = trim($params[$x]['rhs']);
                     continue;
                 }
@@ -5083,7 +5374,7 @@ FORM;
             $html .= ' ' .  'accept-charset="' . $charset . '"';
 
             if( !$FUNCS->is_title_clean($name) ){
-                die( "ERROR: Tag \"".$node->name."\" 'name' contains invalid characters. (Only lowercase[a-z], numerals[0-9] hyphen and underscore permitted" );
+                die( "ERROR: Tag \"".$node->name."\": 'name' attribute ({$name}) contains invalid characters. (Only lowercase[a-z], numerals[0-9], hyphen and underscore permitted.)" );
             }
             $CTX->set( 'k_cur_form', $name );
             $CTX->set( 'k_cur_form_method', $method );
@@ -5095,6 +5386,7 @@ FORM;
 
             $pg = null;
             $page_id = ( isset($page_id) && $FUNCS->is_non_zero_natural($page_id) ) ? (int)$page_id : null;
+            $validate_bound = ( $validate_bound==='1' ) ? 1 : 0;
 
             // check if the form is data-bound
             if( $masterpage ){
@@ -5155,7 +5447,7 @@ FORM;
                     $f->resolve_dynamic_params();
                     unset( $f );
                 }
-                $CTX->set_object( 'bound_page', $pg );
+                $CTX->set_object( 'k_bound_page', $pg );
                 $CTX->set( 'k_cur_form_mode', $mode );
 
                 // Add CSRF token? (default is yes)
@@ -5230,7 +5522,7 @@ FORM;
 
                         foreach( $form as $k=>$v ){
                             $f = &$form[$k];
-                            if( !$f->module ){ // skip bound fields as they will be validated by the owner modules while subsequently saving the page
+                            if( !$f->module || $validate_bound ){ // if nor explicitly asked to, skip bound fields as they will be validated by the owner modules while subsequently saving the page
                                 if( !$f->validate() ){
                                     $CTX->set( 'k_error_'.$f->name, $f->err_msg );
                                     $errors[] = '<b>' . (($f->label) ? $f->label : $f->name) . ':</b> ' .$f->err_msg;
@@ -5300,6 +5592,7 @@ FORM;
                 foreach( $node->children as $child ){
                     $sub_html .= $child->get_HTML();
                 }
+
             }
 
             $html .= $sub_html;
@@ -5355,7 +5648,7 @@ FORM;
                                  'format', 'reload_text',
                                  'allowed_html_tags',
                                  'trust_mode', 'no_js', 'simple_mode',
-                                 'strip_tags',
+                                 'strip_tags', 'not_active',
                                  );
             $extra = '';
             $name = '';
@@ -5363,7 +5656,7 @@ FORM;
             for( $x=0; $x<count($params); $x++ ){
                 $attr = strtolower(trim($params[$x]['lhs']));
                 if( in_array($attr, $core_attr) ){
-                    $val = trim( $params[$x]['rhs'] );
+                    $val = ($attr=='not_active') ? $params[$x]['rhs'] : trim( $params[$x]['rhs'] );
                     $$attr = $val;
                     continue;
                 }
@@ -5385,7 +5678,7 @@ FORM;
             }
             if( !$name ){ die("ERROR: Tag \"".$node->name."\" needs a 'name' attribute"); }
             if( !$FUNCS->is_title_clean($name) ){
-                die( "ERROR: Tag \"".$node->name."\" 'name' contains invalid characters. (Only lowercase[a-z], numerals[0-9] hyphen and underscore permitted" );
+                die( "ERROR: Tag \"".$node->name."\": 'name' attribute ({$name}) contains invalid characters. (Only lowercase[a-z], numerals[0-9], hyphen and underscore permitted.)" );
             }
             if( !$id ){ $id = $name; }
 
@@ -5412,7 +5705,7 @@ FORM;
                 if( $type=='bound' ){
                     // first check if form is data bound to any page..
                     // if so and a matching field found, use that
-                    $pg = &$CTX->get_object( 'bound_page', 'form' );
+                    $pg = &$CTX->get_object( 'k_bound_page', 'form' );
                     if( is_null($pg) ){
                         die("ERROR: Tag \"".$node->name."\" of type 'bound' needs to be within a Data-bound form");
                     }
@@ -5467,6 +5760,7 @@ FORM;
                         'system' => '0',
                         'allowed_html_tags' => $allowed_html_tags,
                         'trust_mode' => $strip_tags ? 0 : 1,
+                        'not_active' => $not_active,
                     );
 
                     if( $is_udf ){
@@ -5495,11 +5789,16 @@ FORM;
 
                 // form submitted?
                 $submitted = ( $form_method=='post' ) ? isset($_POST['k_hid_'.$form]) : isset($_GET['k_hid_'.$form]);
+
+                // field conditionally inactive? (also generates JS for conditional logic)
+                $f->k_inactive = !$FUNCS->resolve_active( $f, $form, $submitted );
+
                 if( $submitted ){
                     $var_name = $name;
                     if( $type=='bound' ){
                         $var_name = 'f_'.$var_name; // hack for admin-panel's unfortunate naming of fields
                     }
+
                     ( $form_method=='post' ) ? $f->store_posted_changes($_POST[$var_name]) : $f->store_posted_changes($_GET[$var_name]);
                 }
             }
@@ -5545,7 +5844,7 @@ FORM;
         }
 
         function send_mail( $params, $node ){
-            global $FUNCS;
+            global $FUNCS, $CTX;
 
             extract( $FUNCS->get_named_vars(
                         array(
@@ -5554,7 +5853,7 @@ FORM;
                               'cc'=>'',
                               'bcc'=>'',
                               'reply_to'=>'',
-                              'return_path'=>'',
+                              'sender'=>'',
                               'charset'=>'',
                               'subject'=>'',
                               'debug'=>'0',
@@ -5569,12 +5868,16 @@ FORM;
             $cc = trim( $cc );
             $bcc = trim( $bcc );
             $reply_to = trim( $reply_to );
-            $return_path = trim( $return_path );
+            $sender = trim( $sender );
             $charset = trim( $charset );
             if( $charset=='' ) $charset=K_CHARSET;
             $debug = ( $debug==1 ) ? 1 : 0;
             $logfile = trim( $logfile );
             $html = ( $html==1 ) ? 1 : 0;
+
+            //  setup objects to be filled by child cms:attachment and cms:alt_body tags
+            $arr_config = array( 'att'=>array(), 'alt_body'=>null );
+            $CTX->set_object( '__config', $arr_config );
 
             foreach( $node->children as $child ){
                 $msg .= $child->get_HTML();
@@ -5584,7 +5887,7 @@ FORM;
             if( $cc ) $headers['Cc']=$cc;
             if( $bcc ) $headers['Bcc']=$bcc;
             if( $reply_to ) $headers['Reply-To']=$reply_to;
-            if( $return_path ) $headers['Return-Path']=$return_path;
+            if( $sender ) $headers['Sender']=$sender;
             $headers['MIME-Version']='1.0';
             if( $html ){
                 $headers['Content-Type']='text/html; charset='.$charset;
@@ -5596,7 +5899,7 @@ FORM;
                 $msg = strip_tags($msg);
             }
 
-            $rs = $FUNCS->send_mail( $from, $to, $subject, $msg, $headers );
+            $rs = $FUNCS->send_mail( $from, $to, $subject, $msg, $headers, $arr_config, $debug );
             if( $debug ){
                 $log = "From: $from\r\nTo: $to\r\n";
                 foreach( $headers as $k=>$v ){
@@ -5932,6 +6235,7 @@ MAP;
                               'thumbnail'=>'0', /* valid for 'securefile' attachments only */
                               'cache_for'=>'0', /* -do- */
                               'count_hits'=>'0', /* -do- */
+                              'user_id'=>'0', /* takes precedence over access_level */
                               ),
                         $params)
                    );
@@ -5946,6 +6250,9 @@ MAP;
             if( !$FUNCS->is_natural($thumbnail) ) $thumbnail=0;
             if( !$FUNCS->is_natural($cache_for) ) $cache_for=0;
             $count_hits = ( $count_hits==1 ) ? 1 : 0;
+            $user_id = trim( $user_id );
+            if( !$FUNCS->is_non_zero_natural($user_id) ) $user_id=0;
+            if( $user_id ){ $access_level = 'i'.$user_id; }
 
             $action = 0;
             if( $redirect ) $action = 1;
@@ -6103,7 +6410,7 @@ MAP;
             $qs_param = $CTX->get( 'k_qs_param' );
 
             $page = $CTX->get( 'k_current_page' );
-            $totalitems = $CTX->get( 'k_total_records' );
+            $totalitems = $CTX->get( 'k_total_records_for_pagination' );
             $limit = $CTX->get( 'k_paginate_limit' );
             $targetpage = $page_link;
             $pagestring = $sep . $qs_param . "=";
@@ -6249,14 +6556,29 @@ MAP;
             global $FUNCS;
 
             if( count($node->children) ) {die("ERROR: Tag \"".$node->name."\" is a self closing tag");}
-            return $FUNCS->strlen( trim(strip_tags($params[0]['rhs'])) ) ? 1 : 0;
+            return $FUNCS->strlen( trim(@strip_tags($params[0]['rhs'])) ) ? 1 : 0;
         }
 
         function strlen( $params, $node ){
             global $FUNCS;
 
             if( count($node->children) ) {die("ERROR: Tag \"".$node->name."\" is a self closing tag");}
-            return $FUNCS->strlen( trim($params[0]['rhs']) );
+            return $FUNCS->strlen( @trim($params[0]['rhs']) );
+        }
+
+        function trim( $params, $node ){
+            global $FUNCS;
+
+            if( count($node->children) ){
+                foreach( $node->children as $child ){
+                    $html .= $child->get_HTML();
+                }
+            }
+            else{
+                $html = $params[0]['rhs'];
+            }
+
+            return trim( $html );
         }
 
         // Expects a full URL to redirect to (querystring should be urlencoded)
@@ -6321,10 +6643,12 @@ MAP;
                     array(
                           'msg'=>'',
                           'is_404'=>'0',
+                          'no_commit'=>'0',
                         ),
                     $params)
                 );
             $is_404 = ( $is_404==1 ) ? 1 : 0;
+            $no_commit = ( $no_commit==1 ) ? 1 : 0;
 
             ob_end_clean(); // discard all previous content..
 
@@ -6338,7 +6662,9 @@ MAP;
                 $html = $msg;
             }
 
-            $DB->commit( 1 ); // force commit, we are finished.
+            if( !$no_commit ){
+                $DB->commit( 1 ); // force commit, we are finished.
+            }
 
             if( $is_404 ){
                 header('HTTP/1.1 404 Not Found');
@@ -6566,7 +6892,7 @@ MAP;
             if( is_array($days) ){
 
                 // Today's date for timeline
-                $date = time() + (K_GMT_OFFSET * 60 * 60); //desktop time
+                $date = @strtotime( $FUNCS->get_current_desktop_time() ); //desktop time
                 $cur_year = date( 'Y', $date );
                 $cur_month = date( 'm', $date );
                 $cur_day = date( 'd', $date );
@@ -7012,11 +7338,14 @@ MAP;
                                'validator'=>'',
                                'separator'=>'',
                                'val_separator'=>'',
+                               'case_sensitive'=>'0',
                               ),
                         $params)
                    );
 
-            $validator = strtolower( trim($validator) );
+            $case_sensitive = ( $case_sensitive==1 ) ? 1 : 0;
+            $validator = trim( $validator );
+            if( !$case_sensitive ){ $validator = strtolower( $validator ); }
             if( !strlen($validator) ) {die("ERROR: Tag \"".$node->name."\" requires a 'validator' parameter");}
             $separator = trim( $separator );
             if( !strlen($separator) ) $separator = '|';
@@ -7375,4 +7704,190 @@ MAP;
             return $html;
         }
 
+        // Array related tags
+        /*
+            for non-associative arrays e.g.
+            <cms:set rec='["de", "fr", "es"]' is_json='1' />
+            <cms:arr_val_exists 'fr' in=rec />
+        */
+        function arr_val_exists( $params, $node ){
+            global $FUNCS;
+            if( count($node->children) ) {die("ERROR: Tag \"".$node->name."\" is a self closing tag");}
+
+            extract( $FUNCS->get_named_vars(
+                        array( 'val'=>'',
+                               'in'=>'',
+                              ),
+                        $params)
+                   );
+
+            return ( is_array($in) && in_array($val, $in) ) ? '1' : '0';
+        }
+
+        // shorter alias for cms:arr_val_exists e.g. <cms:is 'fr' in=rec />
+        function is( $params, $node ){
+            return $this->arr_val_exists( $params, $node );
+        }
+
+        /*
+            for associative arrays e.g.
+            <cms:set rec='{"name":"John", "age":30, "cars":[ "Ford", "BMW", "Fiat" ]}' is_json='1' />
+            <cms:arr_key_exists 'cars' in=rec />
+        */
+        function arr_key_exists( $params, $node ){
+            global $FUNCS;
+            if( count($node->children) ) {die("ERROR: Tag \"".$node->name."\" is a self closing tag");}
+
+            extract( $FUNCS->get_named_vars(
+                        array( 'key'=>'',
+                               'in'=>'',
+                              ),
+                        $params)
+                   );
+
+            return ( is_array($in) && array_key_exists($key, $in) ) ? '1' : '0';
+        }
+
+        function arr_count( $params, $node ){
+            global $FUNCS;
+            if( count($node->children) ) {die("ERROR: Tag \"".$node->name."\" is a self closing tag");}
+
+            extract( $FUNCS->get_named_vars(
+                        array( 'var'=>'',
+                              ),
+                        $params)
+                   );
+
+            return ( is_array($var) ) ? count($var) : '';
+        }
+
+        function func( $params, $node ){
+            global $FUNCS, $CTX;
+
+            if( !count($params) || !is_null($params[0]['lhs']) ){ // anonymous function
+                $anon = 1;
+                $_into = $_scope = '';
+                $tmp = array();
+                for( $x=0; $x<count($params); $x++ ){
+                    $attr = strtolower(trim($params[$x]['lhs']));
+                    if( in_array($attr, array('_into', '_scope')) ){
+                        $$attr = trim( $params[$x]['rhs'] );
+                    }
+                    else{
+                        $tmp[] = $params[$x];
+                    }
+                }
+                if( !$_into ){ return; }
+                $_scope = strtolower( $_scope );
+                if( $_scope != '' && ($_scope!='parent' && $_scope!='global' && $_scope!='local') ){
+                    die("ERROR: Tag \"".$node->name."\" has unknown scope '" . $_scope. "'. Only 'global', 'local' or 'parent' are valid.");
+                }
+
+                $params = $tmp;
+            }
+            else{
+                $name = trim( $params[0]['rhs'] );
+                if( !$name ){ ob_end_clean(); die( "ERROR: tag &lt;cms:func /&gt;: Please provide a name for the function being defined" ); }
+                if( array_key_exists($name, $FUNCS->funcs) ){ ob_end_clean(); die( "ERROR: tag &lt;cms:func /&gt;: '$name' already registered" ); }
+            }
+
+            $func = array();
+            $func['code'] = ( count($node->children) ) ? $node->children : array();
+            $func['params'] = array();
+            for( $x=($anon)?0:1; $x<count($params); $x++ ){
+                if( $params[$x]['op']=='=' && $params[$x]['lhs']){
+                    $func['params'][$params[$x]['lhs']]=$params[$x]['rhs'];
+                }
+            }
+
+            if( $anon ){
+                $CTX->set( $_into, $func, $_scope );
+            }
+            else{
+                // register function
+                $FUNCS->funcs[$name] = $func;
+            }
+        }
+
+        function call( $params, $node ){
+            global $FUNCS, $CTX;
+
+            $html = '';
+            if( is_array($params[0]['rhs']) && is_array($params[0]['rhs']['code']) && is_array($params[0]['rhs']['params']) ){ // anonymous function
+                $func = $params[0]['rhs'];
+                $name = 'anonymous';
+            }
+            else{
+                $name = trim( $params[0]['rhs'] );
+                if( !$name ) return;
+
+                if( !array_key_exists($name, $FUNCS->funcs) ){ // function not registered
+                    return 'Error: &lt;cms:func /&gt;: "'.$name.'" not available';
+                }
+                $func = $FUNCS->funcs[$name];
+            }
+
+            // execute function ..
+            $CTX->push( '__call__', 1 /*no_check*/ );
+
+            array_shift( $params );
+            $vars = $FUNCS->get_named_vars( $func['params'], $params );
+            $CTX->set_all( $vars );
+
+            $args = $named_args = array();
+            for( $x=0; $x<count($params); $x++ ){
+                if( $params[$x]['op']=='=' ){
+                    if( $params[$x]['lhs'] ){
+                        $named_args[$params[$x]['lhs']] = $params[$x]['rhs'];
+                    }
+                    $args[] = array( 'name'=>($params[$x]['lhs'])?$params[$x]['lhs']:'', 'val'=>$params[$x]['rhs'] );
+                }
+            }
+            $CTX->set( 'k_func', $name );
+            $CTX->set( 'k_args', $args );
+            $CTX->set( 'k_named_args', $named_args ); // make available original arguments
+
+            foreach( $func['code'] as $child ){
+                $html .= $child->get_HTML();
+            }
+
+            $CTX->pop();
+
+            return $html;
+        }
+
+        function func_exists( $params, $node ){
+            global $FUNCS;
+            if( count($node->children) ) {die("ERROR: Tag \"".$node->name."\" is a self closing tag");}
+
+            $name = trim( $params[0]['rhs'] );
+            $res = ( array_key_exists($name, $FUNCS->funcs) ) ? '1' : '0';
+
+            return $res;
+        }
+
+        function escape_json( $params, $node ){
+            global $FUNCS;
+
+            // call the children
+            foreach( $node->children as $child ){
+                $html .= $child->get_HTML();
+            }
+
+            $html = $FUNCS->json_encode( $html );
+            return $html;
+        }
+
+        function conditional_js( $params, $node ){
+            global $FUNCS;
+            if( count($node->children) ) {die("ERROR: Tag \"".$node->name."\" is a self closing tag");}
+
+            $js = $FUNCS->gen_js_for_conditional_fields( 1 );
+
+            return $js;
+        }
+
+        function alt_js( $params, $node ){
+            return;
+        }
     } //end class KTags
